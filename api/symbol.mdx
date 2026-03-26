@@ -1,0 +1,40 @@
+---
+title: "Symbol"
+description: "Represents a single symbol with its ID, short name, and full name."
+---
+
+`Symbol` is a plain data class that describes one distinct symbol in a slot game. All symbols for a game are loaded into `Slot_config::symbols_list` during initialization.
+
+## Members
+
+| Member | Type | Description |
+|---|---|---|
+| `symbol_ID` | `unsigned` | Unique identifier. Assigned sequentially starting from `0`; the index in `symbols_list` always equals `symbol_ID` |
+| `short_name` | `char[4]` | Up to 3 printable characters plus a null terminator (`'\0'`). Displayed in console screen output and stored in `Reel_set::reel_strips_short_name` |
+| `symbol_name` | `string` | Full descriptive name of the symbol |
+
+## Loading from CSV
+
+Symbols are read from `symbols.csv` in the config folder. The file has a header row followed by one symbol per row in `name,short_name,ID` order:
+
+```csv
+name,short_name,id
+Wild,WLD,0
+Scatter,SCT,1
+Seven,  7 ,2
+Bell,BEL,3
+Cherry,CHR,4
+```
+
+The loader validates that IDs are strictly sequential. A short name longer than 3 characters triggers a warning.
+
+## Accessing Symbol Data
+
+```cpp
+// Access the symbol with ID 2 (index == ID):
+Symbol& sym = config.symbols_list[2];
+cout << sym.symbol_name << " (" << sym.short_name << ")" << endl;
+// Output: Seven (  7 )
+```
+
+`Slot_config::wild_symbols` holds the IDs of any symbols designated as wilds, derived automatically from the prizes list during initialization.

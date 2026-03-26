@@ -1,97 +1,72 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "GameTemplate"
+description: "A C++ Monte Carlo simulation framework for building and analyzing casino-style slot and Slingo games."
 ---
 
-## Setting up
+GameTemplate is a C++ framework developed by **7 Bridges Maths** for rapid development of casino game math models. It provides a complete set of reusable classes for reel mechanics, paytables, win evaluation, and statistical analysis — so you can focus on game-specific logic rather than boilerplate infrastructure.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create and run your first game simulation in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Project structure" icon="folder-open" href="/project-structure">
+    Understand how the framework is organized.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Core concepts" icon="brain" href="/concepts/game-types">
+    Learn about game types, RNG, reel sets, and paytables.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/game">
+    Browse the full class and method reference.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can build
 
-Everything you need to create world-class documentation.
+GameTemplate supports all major slot game mechanics out of the box:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Payline slots" icon="grip-lines" href="/concepts/game-types">
+    Fixed payline games with configurable line patterns and bet-per-line.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Ways-to-win" icon="arrows-left-right" href="/concepts/game-types">
+    243-ways, Megaways, and bidirectional (L2R + R2L) win evaluation.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Scatter pays & clusters" icon="circle-nodes" href="/concepts/game-types">
+    Scatter-triggered awards and cluster-pay mechanics with 4-way or 8-way adjacency.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Slingo" icon="table-cells" href="/api/slingo">
+    Bingo-card hybrid games with joker and super-joker optimal strategy.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## How it works
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Scaffold your game">
+    Use the GitHub template to create a new repository. The setup workflow automatically renames all files and classes to match your game name.
+  </Step>
+  <Step title="Configure game parameters">
+    Place CSV configuration files (reel strips, paytable, paylines, symbol list) in the `game/config/` directory. Load them through `Game_info::load_info()`.
+  </Step>
+  <Step title="Implement game logic">
+    Override the `play()` method in your derived class. Call `Slot` methods to spin reels, evaluate wins, and apply features.
+  </Step>
+  <Step title="Run Monte Carlo simulation">
+    Compile and run. The simulation executes the configured number of plays, tracks full statistics, and writes a JSON results file with RTP and win distributions.
+  </Step>
+</Steps>
+
+## Key features
+
+- **MT19937-64 RNG** — 64-bit Mersenne Twister with seed control for fully reproducible simulations
+- **Multiple win modes** — Paylines, Ways, Scatter pays, Clusters (4-way and 8-way), and bidirectional Ways
+- **Win capping** — Variadic `cap_wins()` for regulatory compliance across multiple win sources
+- **Weighted sampling** — Efficient `Weighted_values` class with cumulative weights and sampling without replacement
+- **Cascade mechanics** — Built-in symbol explosion and gravity drop for tumble/cascade games
+- **Symbol multipliers** — Per-cell multiplier grids for bonus mechanics
+- **JSON output** — Structured results files with configuration snapshot, simulation info, and full statistics
+- **Template scaffold** — GitHub Actions workflow renames the entire project automatically when you create a new repo from the template
+
+<Tip>
+  The `game/` directory is intentionally empty in the template. Add your `config/` CSV files there, and optionally a `results/` directory for simulation output.
+</Tip>

@@ -1,0 +1,50 @@
+---
+title: "Prize"
+description: "Represents a single win condition (symbol + N-of-a-kind) with its payout."
+---
+
+`Prize` encodes one winning combination: a specific symbol appearing a specific number of times (`xN`), the resulting payout, whether it is scatter-triggered, and which wild symbols may substitute into it.
+
+All non-zero prize entries from `prizes.csv` are loaded into `Slot_config::prizes_list`, which is sorted in descending order of `payout` to allow early-exit evaluation loops.
+
+## Members
+
+| Member | Type | Description |
+|---|---|---|
+| `symbol_ID` | `unsigned` | The symbol this prize applies to |
+| `xN` | `unsigned` | Number of matching symbols required (e.g. `3` = three of a kind) |
+| `payout` | `unsigned` | Payout in credits; multiplied by `Slot_config::bet_per_line` for paylines games |
+| `isScatter` | `bool` | `true` if this prize is triggered by scatter rules rather than payline evaluation |
+| `wildSubst` | `vector<unsigned>` | IDs of wild symbols that can substitute into this combination |
+
+## Sorting: greater_than_payout
+
+```cpp
+struct greater_than_payout {
+    inline bool operator()(const Prize& a, const Prize& b) {
+        return a.payout > b.payout;
+    }
+};
+```
+
+This comparator is passed to `std::sort` inside `load_prizes_list()` to arrange `prizes_list` in descending payout order:
+
+```cpp
+sort(prizes_list.begin(), prizes_list.end(), greater_than_payout());
+```
+
+Because the list is sorted descending, win-evaluation code can iterate from index `0` and `break` as soon as a matching prize is found, avoiding unnecessary comparisons against lower-value entries.
+
+## Usage
+
+```cpp
+// Iterate prizes for early-exit win evaluation:
+for (const Prize& p : config.prizes_list) {
+    if (/* combination matches p.symbol_ID x p.xN */) {
+        unsigned win = p.payout * config.bet_per_line;
+        break;  // highest payout found first — stop searching
+    }
+}
+```
+
+Wild substitution data in `wildSubst` is also used by `Slot_config::load_wild_substitutions()` to populate the `substitutes_for` matrix and the `wild_symbols` ID list.

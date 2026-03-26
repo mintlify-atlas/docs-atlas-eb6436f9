@@ -1,0 +1,97 @@
+---
+title: "Reel_set"
+description: "Manages reel strips, stops, and spinning for one set of reels."
+---
+
+`Reel_set` holds the reel strip data for one reel set and provides the spin mechanism. An optional set of *tracker* reels can be loaded from the same file to model horizontally-scrolling bonus trackers.
+
+Multiple `Reel_set` instances are stored in `Slot_config::reel_sets`.
+
+## Initialization
+
+```cpp
+// Standard reel set — loads n_reels strips from CSV
+void init(int n_reels, string file_path);
+
+// Reel set with horizontal tracker reels appended in the same CSV
+void init(int n_reels, int n_trackers, string file_path);
+```
+
+The CSV format is one reel strip per row; each row is a comma-separated list of symbol IDs. Tracker strips immediately follow the reel strips in the same file.
+
+## Spinning
+
+```cpp
+// Draw a uniformly random stop for every reel (and every tracker)
+void spin(mt19937_64& rng);
+
+// Deterministically set stops — useful for reproducible tests
+void force_stops(vector<unsigned> stops_param);
+```
+
+After `spin()`, `stops[i]` is in the range `[0, reels_length[i] - 1]`. `force_stops()` requires `stops_param.size() == number_of_reels`; it prints a warning and pauses if sizes disagree.
+
+## Data Members
+
+### Reel strip data
+
+| Member | Type | Description |
+|---|---|---|
+| `reel_strips` | `vector<vector<int>>` | `reel_strips[reel][position]` — symbol ID at each strip position |
+| `trackers_strips` | `vector<vector<int>>` | Tracker reel strips, same layout as `reel_strips` |
+| `reel_strips_short_name` | `vector<vector<string>>` | Symbol short names for every strip position (reels then trackers); populated by `Slot_config::init()` |
+| `reels_length` | `vector<unsigned>` | Number of positions in each reel strip |
+| `trackers_length` | `vector<unsigned>` | Number of positions in each tracker strip |
+
+### Current stops
+
+| Member | Type | Description |
+|---|---|---|
+| `stops` | `vector<unsigned>` | Current stop index for each reel after the last `spin()` call |
+| `stops_trackers` | `vector<unsigned>` | Current stop index for each tracker reel |
+
+### Metadata
+
+| Member | Type | Description |
+|---|---|---|
+| `number_of_reels` | `int` | Number of main reels (default `0`) |
+| `number_of_trackers` | `int` | Number of tracker reels (default `0`) |
+| `name` | `string` | Reel set identifier, e.g. `"reel_set__0"` |
+
+### Symbol distribution
+
+| Member | Type | Description |
+|---|---|---|
+| `symbols_distribution` | `vector<vector<unsigned>>` | `symbols_distribution[symbolID][reel]` — count of that symbol on that reel strip; populated by `count_symbols_by_reel()` |
+
+## Utility Methods
+
+### log_stops()
+
+```cpp
+string log_stops();
+```
+
+Returns a comma-separated string of `ST:stop:length` tokens, one per reel followed by one per tracker. Example for a 3-reel game:
+
+```
+ST:14:64,ST:7:64,ST:51:64
+```
+
+Tracker stops are adjusted by `(stop + strip_length - 3) % strip_length` before logging to account for the display offset.
+
+### calculate_min_dist()
+
+```cpp
+int calculate_min_dist(int symbol, int reel);
+```
+
+Returns the minimum gap (in strip positions) between any two consecutive occurrences of `symbol` on `reel`. Returns `-1` if the symbol does not appear on that reel. Used by `Slot_config::print_dist_symbols()`.
+
+### count_symbols_by_reel()
+
+```cpp
+void count_symbols_by_reel(int number_of_symbols);
+```
+
+Populates `symbols_distribution[symbol][reel]` by iterating over all reel strip positions. Called automatically by `Slot_config::init()` for all base reel sets.

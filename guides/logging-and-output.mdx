@@ -1,0 +1,211 @@
+---
+title: "Logging and output"
+description: "Simulation output files, play-by-play logging, and the rnd_log system."
+---
+
+GameTemplate produces two categories of output: a JSON results file written at the end of every simulation, and optional play-by-play log files produced by the `rnd_log` system when `LOG_PLAYS` is defined.
+
+## JSON results file
+
+The main output of every simulation run. It captures a complete snapshot of the configuration, run parameters, and statistics — everything needed to reproduce or audit the simulation.
+
+**Location:** `game/results/` (or `results/` when running from the game folder). The directory is created if it does not exist.
+
+**Filename format:**
+
+```
+_rtp_<rtp>__<timestamp>__<game_name>_v<version>.json
+```
+
+Example: `_rtp_0.960000__1711234567__MySlotGame_v1.0.json`
+
+**Top-level structure:**
+
+```json
+{
+  "config": { ... },
+  "info":   { ... },
+  "stats":  { ... }
+}
+```
+
+| Key | Source | Contents |
+|---|---|---|
+| `config` | `config.json_config` | Full game configuration snapshot (reel strips, paytable, weights, etc.). |
+| `info` | `info.json_info` + RNG seed | Run parameters: game name, version, bet, cap, number of reels, seed used, and more. |
+| `stats` | `stats.stats_to_json(stake)` | All simulation results. See [Statistics and RTP](/guides/statistics-and-rtp) for the full field list. |
+
+Because the seed used for the run is embedded in `info.seed`, any results file is self-sufficient for reproducing the exact simulation.
+
+## rnd_log — play-by-play logging
+
+`rnd_log` (defined in `CommonLib/include/rnd_log.h`) records every random draw and spin outcome to text files. It is active only when `LOG_PLAYS` is defined at compile time.
+
+### Enabling rnd_log
+
+Add the preprocessor define before building:
+
+```cpp
+#define LOG_PLAYS
+```
+
+When enabled, `game->init()` calls `randomLogs.init(info)` automatically.
+
+### Output files
+
+`rnd_log::init(Game_info info)` opens two files, both placed in a `logs/` subfolder next to the game config folder:
+
+| File | Purpose |
+|---|---|
+| `logs/randomLog.txt` | One line per play: all random draws in the order they occurred, followed by the play win. |
+| `logs/gameDetails.txt` | One entry per play: the screen state after each spin and the final win. |
+
+### Random log format
+
+Each draw appends a comma-separated token: `Mask:result:range`. A stop log token has the form `ST:stop:length`. At the end of a spin, a `#win` value is appended. At the end of the full play (after all spins), a newline terminates the record.
+
+Example line:
+
+```
+RS:3:10,ST:7:50,ST:2:40,ST:11:60,ST:0:45,ST:9:55#0.00
+```
+
+### rnd_log methods
+
+#### init
+
+```cpp
+void rnd_log::init(Game_info info);
+```
+
+Opens `randomLog.txt` and `gameDetails.txt` for writing and initialises the internal `Slot_config` used for screen symbol name resolution.
+
+#### log_rnd
+
+```cpp
+void log_rnd(Weighted_values w);
+void log_rnd(string mask, unsigned result, unsigned range);
+```
+
+Appends a random draw to the current play's random-log buffer. The `Weighted_values` overload uses `w.name` as the mask and records `w.last_random` and `w.total_weight`. The string overload uses an explicit mask, result, and range.
+
+Format appended: `Mask:result:range,`
+
+#### log_stops
+
+```cpp
+void log_stops(Reel_set reel_set);
+void log_stops(Reel_set reel_set, int reel);
+void log_stops(Reel_set reel_set, string mask, vector<int> offsets);
+```
+
+Appends stop information for a reel set. The first overload logs all reels and trackers using the `ST` mask. The second logs a single reel only. The third applies per-reel stop offsets and uses a custom mask — useful when logging a secondary reel set that has a positional offset relative to the primary.
+
+Format: `ST:stop:length,ST:stop:length,...`
+
+Call this after `spin()` and `drop_new_symbols()` so the stops are up to date.
+
+#### log_spin_win
+
+```cpp
+void log_spin_win(
+    unsigned long long spin_win,
+    vector<vector<int>> screen,
+    string additional_info = "-"
+);
+```
+
+Logs the win for an individual spin (e.g. a single free spin within a bonus round) and records the current screen state to `gameDetails.txt`. The random-log buffer is flushed up to this point with a `#win` separator.
+
+<Tip>
+Use the `additional_info` parameter to tag which game phase produced the win — for example `"phase:FREE_SPINS"` or `"multiplier:3x"`. This string is embedded directly in the `gameDetails.txt` entry, making it easy to filter specific phases when reviewing logs.
+</Tip>
+
+#### log_total_win
+
+```cpp
+void log_total_win(
+    unsigned long long total_win,
+    vector<vector<int>> screen,
+    string additional_info = "-"
+);
+```
+
+Finalises the log entry for a complete play. Writes both buffers to their respective files, resets all internal state, and increments the play counter. Once `number_of_logs` plays have been recorded the files are closed, a pause prompt is shown, and the process exits.
+
+<Tip>
+Passing `additional_info` here captures metadata about the final outcome of the play — for example the total free-spin count or which bonus variant was triggered. This supplements the per-spin detail written by `log_spin_win()`.
+</Tip>
+
+#### log_rnd_without_replacement
+
+```cpp
+void log_rnd_without_replacement(Weighted_values w, unsigned sample_size);
+```
+
+Logs a draw-without-replacement operation. Delegates to `w.log_without_replacement(sample_size)` for formatting.
+
+#### resume
+
+```cpp
+void resume();
+```
+
+Clears all in-progress log buffers and resets spin counters without writing to disk. Use this to discard a partially-logged play when aborting a spin sequence.
+
+### Controlling log volume
+
+```cpp
+rnd_log::number_of_logs = 10'000; // default
+```
+
+Logging stops automatically after `number_of_logs` plays. Override this field after calling `init()` to change the limit.
+
+<Note>
+At the default of 10,000 plays, `randomLog.txt` can grow to tens of megabytes for games with many random draws per play. Reduce `number_of_logs` to a smaller value (e.g. 1,000) in production builds, or define `LOG_PLAYS` only in dedicated debug builds.
+</Note>
+
+## Screen logging
+
+The `Slot` base class provides methods for logging and printing the current screen state:
+
+| Method | Description |
+|---|---|
+| `Slot::log_screen(Slot_config& config)` | Returns a JSON-formatted string of the current screen using symbol short names. |
+| `Slot::log_screen(Slot_config& config, int spin)` | Same, but includes a spin index label. |
+| `Slot::print_screen()` | Prints the screen to console using raw symbol IDs. |
+| `Slot::print_screen(Slot_config& config)` | Prints the screen to console using symbol short names from `config`. |
+
+`rnd_log` uses `log_screen()` internally when `log_spin_win()` or `log_total_win()` is called.
+
+## Stop logging
+
+`Reel_set::log_stops()` returns a formatted string describing the current reel stops:
+
+```
+ST:stop:length,ST:stop:length,...
+```
+
+This is the same format that `rnd_log::log_stops()` appends to the random log. It can also be used independently — for example to embed stop information in custom diagnostic output.
+
+## Win_and_RTP_distribution
+
+`Win_and_RTP_distribution` (defined in `CommonLib/include/Win_and_RTP_distribution.h`) provides per-feature distribution tracking independent of the main `Game_statistics` object. Construct one instance per feature:
+
+```cpp
+Win_and_RTP_distribution fs_distribution("free_spins");
+```
+
+Call `count_stats_play()` each time the feature produces a win:
+
+```cpp
+fs_distribution.count_stats_play(fs_win, stake);
+```
+
+To include the distribution in the JSON results, call `to_json()` and embed the result:
+
+```cpp
+j["stats"]["free_spins_distribution"] = fs_distribution.to_json();
+```
+
+This is useful for tracking free-spin RTP separately from base-game RTP, or for measuring any sub-feature independently without modifying `Game_statistics`.

@@ -1,0 +1,126 @@
+---
+title: "Reel sets"
+description: How reel strips are structured, loaded, and spun.
+---
+
+A **reel set** is a collection of reel strips. Each strip is a sequence of symbol IDs representing the full physical reel. The current **stop** for a reel is the index of the symbol that appears at position 0 (top row) of that reel on screen.
+
+## Loading a reel set
+
+### Standard reels
+
+```cpp
+Reel_set rs;
+rs.init(n_reels, "config/reel_set__0.csv");
+```
+
+Reads `n_reels` lines from the CSV file. Each line contains the symbol IDs for one reel strip, separated by commas. After loading:
+
+- `reel_strips[reel][position]` — symbol ID at that strip position
+- `reels_length[reel]` — length of the strip for reel `reel`
+- `stops[reel]` — initialized to `0` for all reels
+
+### With tracker reels
+
+```cpp
+rs.init(n_reels, n_trackers, "config/reel_set__0.csv");
+```
+
+Loads the standard reels first, then reads `n_trackers` additional lines for horizontal tracker strips into `trackers_strips`. Tracker stops are held in `stops_trackers[]`.
+
+<Note>
+  Reel set files are named `reel_set__0.csv`, `reel_set__1.csv`, etc. (note the double underscore) in the config folder. `Slot_config::load_reel_sets()` discovers and loads them automatically by incrementing the index until no further file is found. The resulting sets are stored in `Slot_config::reel_sets` (a `vector<Reel_set>`).
+</Note>
+
+## Key members
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `reel_strips` | `vector<vector<int>>` | `strips[reel][position]` — symbol ID |
+| `trackers_strips` | `vector<vector<int>>` | Strips for horizontal tracker reels |
+| `stops` | `vector<unsigned>` | Current stop position per reel |
+| `stops_trackers` | `vector<unsigned>` | Current stop position per tracker |
+| `reels_length` | `vector<unsigned>` | Strip length per reel |
+| `number_of_reels` | `int` | Total number of standard reels |
+| `number_of_trackers` | `int` | Total number of tracker reels |
+| `name` | `string` | Identifier used in logs |
+
+## Spinning
+
+```cpp
+void Reel_set::spin(mt19937_64& rng);
+```
+
+Draws a uniform random stop for each reel in `[0, strip_length − 1]`. Tracker reels are also spun if present. The selected stop is stored in `stops[reel]`.
+
+## Forcing stops (deterministic testing)
+
+```cpp
+reel_set.force_stops({10, 5, 22, 0, 14});
+```
+
+Overrides `stops[]` directly. The `stops_param` vector must have exactly `number_of_reels` entries; a size mismatch prints a warning.
+
+## Building the screen
+
+```cpp
+void Slot::get_screen(Reel_set& reel_set);
+```
+
+Fills `screen[row][col]` by reading `reel_heights[col]` symbols starting at `stops[col]` and wrapping around the strip:
+
+```cpp
+screen[r][c] = reel_set.reel_strips[c][
+    (reel_set.stops[c] + r) % reel_set.reel_strips[c].size()
+];
+```
+
+Cells where `r >= reels_heights[c]` are set to `-1` (empty). This naturally supports variable-height reels (Megaways).
+
+## Cascades — filling empty cells
+
+```cpp
+void Slot::drop_new_symbols(Reel_set& reel_set);
+```
+
+After symbols are removed (e.g. in a cascade game), this method refills each empty cell (`-1`) with the next symbol from the strip by decrementing `stops[reel]` (wrapping). Tracker empty cells are refilled by advancing `stops_trackers` in the opposite direction.
+
+## Logging stops
+
+```cpp
+string log = reel_set.log_stops();
+// e.g. "ST:10:60,ST:5:55,ST:22:48,ST:0:60,ST:14:52"
+```
+
+Produces a comma-separated string of `ST:stop:length` tokens — one per reel, then one per tracker. Used in audit/RNG log files.
+
+## Multiple reel sets
+
+Games commonly have distinct reel sets for different phases (base game, free spins, etc.):
+
+```cpp
+vector<Reel_set> reel_sets; // in Slot_config
+Weighted_values  w_reel_sets_main;
+```
+
+Selection at runtime:
+
+```cpp
+int using_reel_set = config.w_reel_sets_main.sample(rng);
+config.reel_sets[using_reel_set].spin(rng);
+get_screen(config.reel_sets[using_reel_set]);
+```
+
+## CSV format
+
+Each row in the file corresponds to one reel. Values are symbol IDs (0-indexed, matching `symbols.csv`), separated by commas. Strip lengths can differ between reels.
+
+```
+0,1,2,3,0,4,2,1,3,0,2,4,1,0,3
+0,2,1,4,3,2,0,1,4,3,0,2,4,1,3,2,0
+1,0,3,2,4,1,0,4,2,3,1,0
+4,3,0,1,2,4,3,1,2,0,4,1,3
+2,1,4,0,3,2,1,0,4,3,2,4,1,0,3
+```
+
+A 5-reel example: reel 0 has 15 positions, reel 1 has 17, and so on.

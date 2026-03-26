@@ -1,0 +1,119 @@
+---
+title: "Paytable and prizes"
+description: How symbols, paytables, and prize objects are configured and evaluated.
+---
+
+## Symbols
+
+Each symbol in the game is represented by a `Symbol` object:
+
+```cpp
+class Symbol {
+    unsigned symbol_ID;  // Unique identifier, starts from 0
+    char short_name[4];  // Up to 3 characters, null-terminated
+    string symbol_name;  // Full display name
+};
+```
+
+Symbols are loaded from `symbols.csv` into `Slot_config::symbols_list` (a `vector<Symbol>`).
+
+**Example `symbols.csv`** (first row is a header, skipped on load):
+
+```
+Symbol name,Short,ID
+Wild,WLD,0
+Scatter,SCA,1
+Ace,A,2
+King,K,3
+Queen,Q,4
+Jack,J,5
+```
+
+Each data row: `symbol_name,short_name,symbol_ID`. IDs must start at `0` and be contiguous. The loader validates that IDs are in increasing order and will pause with a warning if not.
+
+<Warning>
+  The column order is **name first, then short name, then ID** — not ID first. Placing the ID in the first column will cause the name to be used as the ID, producing wrong results.
+</Warning>
+
+<Warning>
+  Symbol IDs in reel strips and in the paytable must be consistent with `symbols.csv`. All three use the same 0-indexed ordering. A mismatch will silently produce wrong payouts or array out-of-bounds access.
+</Warning>
+
+## Paytable
+
+The paytable is a 2D vector:
+
+```cpp
+vector<vector<unsigned>> paytable; // paytable[symbolID][nOfAKind]
+```
+
+`paytable[s][n]` is the payout in credits for `n` of symbol `s`. A value of `0` means no win. Column index `0` and `1` are typically unused (0 and 1 of a kind never pay).
+
+Loaded from `paytable.csv` by `Slot_config::init()`.
+
+**Example `paytable.csv`** (rows = symbols 0–3, columns = 2, 3, 4, 5 of a kind):
+
+```
+0,0,50,200,1000
+1,0,0,0,0
+2,0,10,25,100
+3,0,8,20,75
+```
+
+So symbol `0` (Wild) pays `50` for 3-of-a-kind, `200` for 4, and `1000` for 5. Symbol `1` (Scatter) pays nothing via the paytable (scatter prizes may be handled separately).
+
+**Compile-time limit:** `MAX_N_SYMBOLS = 20`. The paytable and all symbol-indexed arrays are sized to this constant.
+
+## Wild symbols
+
+Wild symbol IDs are listed in `Slot_config::wild_symbols` (a `vector<unsigned>`). The substitution matrix is:
+
+```cpp
+bool substitutes_for[MAX_N_SYMBOLS][MAX_N_SYMBOLS];
+```
+
+`substitutes_for[i][j]` is `true` if symbol `i` substitutes for symbol `j`. Populated automatically by `load_wild_substitutions()` based on `wild_symbols`.
+
+During win evaluation, wild substitution is applied per-reel (for Ways and Lines) or across the whole screen (for Scatter pays).
+
+## Prize objects
+
+For line and ways evaluation, wins are resolved through `prizes_list`:
+
+```cpp
+vector<Prize> prizes_list; // sorted descending by payout
+```
+
+Each `Prize` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol_ID` | `unsigned` | Symbol this prize belongs to |
+| `xN` | `unsigned` | Number of symbols required |
+| `payout` | `unsigned` | Payout in credits |
+| `isScatter` | `bool` | True if this is a scatter prize |
+| `wildSubst` | `vector<unsigned>` | Wild symbol IDs that can substitute |
+
+`prizes_list` is sorted descending by `payout` via the `greater_than_payout` comparator. `get_line_win()` walks the list and returns the index of the first prize whose full `xN` match (the highest-paying applicable prize on that line).
+
+## Fast line evaluation
+
+For paylines games, the 6-dimensional array:
+
+```cpp
+unsigned short paytable_lines[MAX_N_SYMBOLS][MAX_N_SYMBOLS]
+                              [MAX_N_SYMBOLS][MAX_N_SYMBOLS]
+                              [MAX_N_SYMBOLS][MAX_N_SYMBOLS];
+```
+
+maps every possible 6-symbol combination on a payline directly to its payout. Populated at startup by `generate_all_symbols_combinations()`. Used by `get_lines_win_fast_evaluation()` for O(1) per-line lookup:
+
+```cpp
+prize = config.paytable_lines[s[0]][s[1]][s[2]][s[3]][s[4]][s[5]];
+```
+
+This avoids the linear scan over `prizes_list` and is the recommended approach for performance-critical paylines simulations.
+
+## Scatter prize format
+
+For scatter-pays games (`config.type == "Scatter pays"`), the paytable is loaded via `load_paytable_scatter_pays(info)`, which still reads from `paytable.csv` but uses a different sizing: each data row has `n_reels × n_rows + 1` columns instead of `n_reels + 1`, to accommodate the maximum possible scatter count across the full grid.

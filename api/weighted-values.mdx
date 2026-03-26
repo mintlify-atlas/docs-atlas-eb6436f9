@@ -1,0 +1,102 @@
+---
+title: "Weighted_values"
+description: "Efficient pre-computed weighted random sampling from a table of values and weights."
+---
+
+`Weighted_values` implements weighted random selection with O(log n) performance via pre-computed cumulative prefix sums. It is the standard building block for all probabilistic selections in GameTemplate — reel-set transitions, multiplier draws, bonus triggers, and more.
+
+## Initialization
+
+```cpp
+// Load from a two-row CSV: first row is values, second row is weights
+void init(string file_path);
+
+// Programmatic initialization from existing vectors
+void init(vector<int> values, vector<unsigned> weights, string name);
+```
+
+**CSV format** — values on row 1, corresponding weights on row 2, comma-separated:
+
+```csv
+2,3,5,10,25
+5000,3000,1500,400,100
+```
+
+Both overloads pre-compute `cumulative_weight` and `total_weight`. The `name` field defaults to the file path when loading from CSV.
+
+## Sampling
+
+### Standard weighted sampling
+
+```cpp
+// Returns a randomly selected value, weighted by its corresponding weight
+int sample(mt19937_64& rng);
+
+// Returns the index of the selected entry instead of its value
+int sample_index(mt19937_64& rng);
+```
+
+Both use pre-computed cumulative weights for efficient selection. `last_random` is updated on each call.
+
+### Draw without replacement
+
+```cpp
+// Shuffle all entries once into a draw-without-replacement order
+void sample_without_replacement(mt19937_64& rng);
+
+// Retrieve the next value from the shuffled sequence
+int next_value();
+```
+
+Call `sample_without_replacement()` once to prepare the sequence, then call `next_value()` once per draw. `next_value()` prints an error and pauses if called after the sequence is exhausted.
+
+### Variants without pre-computed cumulative weights
+
+```cpp
+// O(n) linear scan — suitable for one-shot draws where init overhead is undesirable
+int sample_WO_cumulative(mt19937_64& rng);
+int sample_index_WO_cumulative(mt19937_64& rng);
+```
+
+Prefer `sample()` / `sample_index()` in hot paths.
+
+## Data Members
+
+| Member | Type | Description |
+|---|---|---|
+| `name` | `string` | Table identifier; defaults to the CSV file path |
+| `values` | `vector<int>` | The values that can be sampled |
+| `weights` | `vector<unsigned>` | Weight for each corresponding value |
+| `cumulative_weight` | `vector<unsigned>` | Pre-computed prefix sums of `weights` |
+| `total_weight` | `unsigned` | Sum of all weights |
+| `last_random` | `int` | Raw random integer drawn on the last `sample()` / `sample_index()` call; used for logging |
+
+## Logging
+
+```cpp
+// Returns "name:last_random:total_weight" — appended to the rnd_log
+string log();
+
+// Returns a comma-separated log string for n draws-without-replacement
+string log_without_replacement(unsigned n);
+
+// Serializes values and weights as {"values": [...], "weights": [...]}
+json to_json();
+```
+
+## Utility
+
+```cpp
+// Returns a deep copy with all vectors and parameters duplicated
+Weighted_values make_copy();
+```
+
+## Usage Example
+
+```cpp
+Weighted_values wv;
+wv.init("config/multipliers.csv");  // row 1: values, row 2: weights
+
+// In the play loop (efficient — uses pre-computed cumulative weights):
+int multiplier = wv.sample(rng);
+```

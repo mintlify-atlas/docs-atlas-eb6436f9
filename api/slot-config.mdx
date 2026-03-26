@@ -1,0 +1,99 @@
+---
+title: "Slot_config"
+description: "Holds all configuration for a slot game: symbols, paytable, wild substitutions, paylines, and reel sets."
+---
+
+`Slot_config` is the central configuration object for a slot game. It loads and owns all static game data — symbols, paytable, wild substitution rules, paylines, and reel sets — and exposes them to the `Slot` simulation engine.
+
+## Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `MAX_N_SYMBOLS` | `20` | Maximum number of distinct symbols supported |
+
+## Initialization
+
+Three overloads are provided. All of them load symbols, reel sets, the paytable, prizes, wild substitutions, and paylines.
+
+```cpp
+// Load from a Game_info struct (preferred — also sets game type)
+void init(Game_info info);
+
+// Explicit dimensions, with tracker reels
+void init(unsigned n_reels, unsigned n_trackers, unsigned n_rows, string config_folder);
+
+// Explicit dimensions, no tracker reels
+void init(unsigned n_reels, unsigned n_rows, string config_folder);
+```
+
+| Parameter | Description |
+|---|---|
+| `info` | `Game_info` struct carrying all dimensions and the config folder path |
+| `n_reels` | Number of reels |
+| `n_trackers` | Number of horizontal tracker reels |
+| `n_rows` | Maximum number of visible rows |
+| `config_folder` | Path to the folder containing `symbols.csv`, `paytable.csv`, `prizes.csv`, `paylines.csv`, and `reel_set__N.csv` files |
+
+When initialised via `init(Game_info)`, the game type string is also set and scatter-pays games receive a differently-shaped paytable.
+
+## Public Data Members
+
+### Dimensions
+
+| Member | Type | Description |
+|---|---|---|
+| `n_reels` | `unsigned` | Number of reels |
+| `n_rows` | `unsigned` | Maximum number of visible rows |
+| `n_trackers` | `unsigned` | Number of tracker reels |
+| `bet_per_line` | `unsigned` | Credits wagered per payline (default `1`) |
+
+### Symbols
+
+| Member | Type | Description |
+|---|---|---|
+| `symbols_list` | `vector<Symbol>` | All symbols loaded from `symbols.csv`; index equals `symbol_ID` |
+| `wild_symbols` | `vector<unsigned>` | IDs of all symbols that act as wilds, derived from the prizes list |
+
+### Reel sets
+
+| Member | Type | Description |
+|---|---|---|
+| `reel_sets` | `vector<Reel_set>` | All reel sets loaded from `reel_set__0.csv`, `reel_set__1.csv`, … |
+
+### Paytable & prizes
+
+| Member | Type | Description |
+|---|---|---|
+| `paytable` | `vector<vector<unsigned>>` | `paytable[symbolID][xN]` — payout for `xN` of a kind of `symbolID` |
+| `prizes_list` | `vector<Prize>` | All non-zero prizes, sorted by `payout` descending |
+| `paytable_lines` | `unsigned short [MAX_N_SYMBOLS][…][MAX_N_SYMBOLS]` | 6-dimensional fast evaluation array indexed by up to six reel symbol IDs |
+
+### Wild substitutions
+
+| Member | Type | Description |
+|---|---|---|
+| `substitutes_for` | `bool [MAX_N_SYMBOLS][MAX_N_SYMBOLS]` | `substitutes_for[wildID][symbolID]` is `true` when the wild substitutes for that symbol when evaluating wins |
+
+### Game metadata
+
+| Member | Type | Description |
+|---|---|---|
+| `type` | `string` | Game evaluation type: `"Paylines"`, `"Ways"`, `"Scatter pays"`, `"Clusters"`, or `"Clusters (8 way)"` |
+| `json_config` | `json` | JSON snapshot of the full configuration (reel strips, paytable, paylines); written to the results file |
+| `paylines` | `Paylines` | Payline definitions loaded from `paylines.csv` |
+
+## Extending Slot_config
+
+Subclass `Slot_config` to add game-specific configuration, such as weighted reel-set selectors for base game vs. free spins:
+
+```cpp
+class MyGame_config : public Slot_config {
+public:
+    void init(Game_info info);
+
+    // Weighted selector for reel set transitions
+    Weighted_values w_reel_sets_main;
+};
+```
+
+The `load_reel_sets()` helper is `protected` and can be called from a subclass `init()` to load additional reel set groups into any `vector<Reel_set>`.

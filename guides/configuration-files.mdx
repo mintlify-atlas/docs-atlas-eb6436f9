@@ -1,0 +1,246 @@
+---
+title: "Configuration files"
+description: "All CSV configuration files required to define a game in GameTemplate."
+---
+
+All configuration files live in the `game/config/` directory. When the executable is run from the game's own folder, `game/config/` is tried first; if `info.csv` is not found there, the framework falls back to a `config/` directory at the executable's working directory. This fallback is implemented in `GameTemplate_main.cpp`:
+
+```cpp
+string folder_config = "game\\config";
+ifstream archivo(folder_config + "\\info.csv");
+if (!archivo.good())
+{
+    folder_config = "config";
+    folder_results = "results";
+}
+```
+
+<Warning>
+  `info.csv` is required. If it is not found in either location, `Game_info::load_info()` fails and the simulation cannot start.
+</Warning>
+
+---
+
+## info.csv
+
+The master configuration file. Loaded by `Game_info::load_info()`. Every other file path is derived from the same directory.
+
+Each row is a `key,value` pair. Order does not matter.
+
+Each row uses the exact field name as the key (first column) and the value in the second column. The recognized field names are:
+
+| CSV field name | Member set | Type | Description |
+|---|---|---|---|
+| `Game name` | `game_name` | string | Game name, used in the output JSON filename. |
+| `Version` | `version` | string | Configuration version, also used in the output filename. |
+| `Type` | `type` | string | Win evaluation mechanic: `Paylines`, `Ways`, `Scatter pays`, `Clusters`, or `Clusters (8 way)`. |
+| `Number of reels` | `n_reels` | integer | Number of vertical reels (does not include tracker/horizontal reels). |
+| `Number of rows` | `number_of_rows` | integer | Maximum number of rows (height). For variable-height reels this is the maximum. |
+| `Number of trackers` | `number_of_trackers` | integer | Number of horizontal tracker rows appended below the main screen. |
+| `Stake` | `bet` | integer | Stake in credits used by the simulation. Default is `100`. |
+| `Bet for cap` | `bet_for_cap` | integer | Bet multiplier used as the denominator when applying the win cap (`cap × bet_for_cap`). |
+| `Cap` | `cap` | integer | Maximum win expressed as a multiple of `bet_for_cap`. |
+| `Simulation plays` | `number_of_plays` | integer (64-bit) | Total number of spins to simulate. |
+| `Seed` | `seed` | integer (64-bit) | RNG seed. `0` = random seed; any non-zero value produces a reproducible run. |
+| `Mode` | `mode` | string | Arbitrary label printed to the console during simulation (e.g. `regular`, `bonus`). |
+| `Plays to print` | `plays_to_print` | integer | Console stats refresh interval in plays. |
+| `Starting balance` | `starting_balance` | integer | Initial balance for session analysis. Defaults to `100 × Stake` if omitted. |
+| `Reels heights` | `reel_heights` | comma-separated integers | Per-reel heights for variable-height (Megaways-style) reels. One value per reel. |
+| `Spins base` | `spins_base` | integer | Number of base-game spins for Slingo games. |
+| `Spins purchase` | `spins_purchase` | integer | Number of purchasable spins for Slingo games. |
+
+`folder_config` and `folder_results` are set programmatically in `main()` and are not read from `info.csv`.
+
+<Warning>
+  Field names are **case-sensitive** and must match exactly (e.g. `Game name` not `game_name`). Unrecognized field names are silently ignored.
+</Warning>
+
+<Accordion title="Example info.csv">
+```csv
+Game name,MySlotGame
+Version,1.0
+Type,Ways
+Number of reels,5
+Number of rows,3
+Stake,100
+Bet for cap,100
+Cap,5000
+Simulation plays,100000000
+Seed,0
+Mode,regular
+Plays to print,10000000
+Starting balance,10000
+```
+</Accordion>
+
+---
+
+## symbols.csv
+
+Defines every symbol in the game. The first row is a **header row** (skipped on load). One symbol per subsequent row.
+
+| Column | Description |
+|---|---|
+| Column 1 | Full symbol name (used as `symbol_name`). |
+| Column 2 | Short name — at most 3 characters. Used in console output and logging (stored as `short_name`). |
+| Column 3 | Symbol ID (integer). Must start at `0` and be sequential with no gaps. The framework will pause with a warning if IDs are not in increasing order. |
+
+<Warning>
+  The column order is **name, short_name, ID** — not ID first. A common mistake is placing the ID in the first column, which will cause the name and ID to be swapped.
+</Warning>
+
+<Accordion title="Example symbols.csv">
+```csv
+Symbol name,Short,ID
+Wild,WLD,0
+HighHorse,HH,1
+HighGem,HG,2
+Medium,MED,3
+Low,LOW,4
+Scatter,SCT,5
+```
+</Accordion>
+
+---
+
+## paytable.csv
+
+A 2-D grid of payouts. Loaded into `Slot_config::paytable` as a `vector<vector<unsigned>>`.
+
+- **The first row is a header row** and is skipped during loading.
+- **Subsequent rows** correspond to symbol IDs (first data row = symbol 0).
+- **Columns** correspond to the number of matching symbols: column 0 = 0-of-a-kind, column 1 = 1-of-a-kind, …, column N = N-of-a-kind where N = number of reels.
+- A value of `0` means no win for that combination.
+
+For a 5-reel Ways game, each data row has 6 values (columns 0–5). Column 0 is always `0` because you cannot win with zero symbols.
+
+<Accordion title="Example paytable.csv (5-reel game)">
+```csv
+symbol,0,1,2,3,4,5
+Wild,0,0,0,0,0,500
+HighHorse,0,0,0,100,250,1000
+HighGem,0,0,0,75,200,800
+Medium,0,0,0,25,75,300
+Low,0,0,0,15,50,200
+Scatter,0,0,0,0,0,0
+```
+
+Symbol 0 (Wild) pays 500 credits for 5-of-a-kind. Symbol 5 (Scatter) pays nothing through the paytable — scatter prizes are handled via `prizes.csv`.
+</Accordion>
+
+---
+
+## prizes.csv
+
+Defines explicit prize objects used for line and ways evaluation. Loaded into `Slot_config::prizes_list`, sorted descending by payout. This file is required for games using `get_line_win()` or `get_winning_clusters()`.
+
+The file has a dynamic number of columns depending on the number of N-of-a-kind prizes. The loader reads until it encounters the `isScatter` column header, so the column count is determined automatically.
+
+Format per row: `payout_2, payout_3, ..., payout_N, isScatter, {wild_id_1,wild_id_2,...}`
+
+- **First row**: header row (loader reads until `isScatter` column to determine column count).
+- **Subsequent rows**: one row per symbol ID (in the same order as `symbols.csv`).
+- `isScatter`: `true` or `false`.
+- `wildSubst`: brace-enclosed comma-separated list of wild symbol IDs that can substitute for this symbol. Empty braces `{}` for non-substitutable symbols.
+
+<Accordion title="Example prizes.csv (5-reel, Wild substitutes for all non-scatter symbols)">
+```csv
+2,3,4,5,isScatter,wildSubst
+0,0,0,500,false,{}
+0,100,250,1000,false,{0}
+0,75,200,800,false,{0}
+0,25,75,300,false,{0}
+0,15,50,200,false,{0}
+0,0,0,0,true,{}
+```
+
+Row 0 = Wild (symbol 0), rows 1–4 = paying symbols, row 5 = Scatter.
+</Accordion>
+
+---
+
+## reel_set__N.csv
+
+One file per reel set, named `reel_set__0.csv`, `reel_set__1.csv`, etc. (note the **double underscore**). The framework loads all sequentially numbered files found in `folder_config`.
+
+- **Each row** in the file corresponds to one reel (row 0 = reel 0).
+- **Columns** within each row are the symbol IDs along that reel's strip.
+- Different rows (reels) can have different numbers of entries (different strip lengths are supported).
+- Values are symbol IDs (matching `symbols.csv`).
+
+<Accordion title="Example reel_set__0.csv (5 reels, variable strip lengths)">
+```csv
+0,1,2,3,0,4,2,1,3,0,2,4,1,0,3
+0,2,1,4,3,2,0,1,4,3,0,2,4,1,3,2,0
+1,0,3,2,4,1,0,4,2,3,1,0
+4,3,0,1,2,4,3,1,2,0,4,1,3
+2,1,4,0,3,2,1,0,4,3,2,4,1,0,3
+```
+
+Reel 0 has 15 positions, reel 1 has 17, reel 2 has 12, and so on.
+</Accordion>
+
+---
+
+## paylines.csv
+
+*Paylines games only.* Defines the payline layout.
+
+- One row per payline.
+- Columns correspond to reels (column 0 = reel 0).
+- Each value is the **0-based row index** that the payline passes through on that reel.
+
+<Accordion title="Example paylines.csv (5-reel, 3-row game, 20 lines)">
+```csv
+1,1,1,1,1
+0,0,0,0,0
+2,2,2,2,2
+0,1,2,1,0
+2,1,0,1,2
+0,0,1,2,2
+2,2,1,0,0
+0,1,1,1,2
+2,1,1,1,0
+1,0,0,0,1
+1,2,2,2,1
+0,1,2,2,2
+2,1,0,0,0
+1,0,1,2,1
+1,2,1,0,1
+0,0,0,1,2
+2,2,2,1,0
+0,0,1,0,0
+2,2,1,2,2
+1,1,0,1,1
+```
+</Accordion>
+
+---
+
+## reel_set_weights.csv (optional)
+
+Controls which reel set is selected each spin. Loaded into `GameTemplate_config::w_reel_sets_main` as a `Weighted_values` object.
+
+The file uses the `Weighted_values` two-row CSV format:
+- **Row 1**: comma-separated reel set indices (values to sample from).
+- **Row 2**: comma-separated weights, one per value.
+
+Weights are relative and do not need to sum to any specific value.
+
+<Accordion title="Example reel_set_weights.csv (single reel set)">
+```csv
+0
+1
+```
+
+Row 1 = value `0` (reel set index 0). Row 2 = weight `1`.
+</Accordion>
+
+<Accordion title="Example reel_set_weights.csv (two reel sets, 90% / 10% split)">
+```csv
+0,1
+90,10
+```
+
+Row 1 = values `0,1` (reel set indices). Row 2 = weights `90,10`.
+</Accordion>

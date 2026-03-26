@@ -1,0 +1,51 @@
+---
+title: "Introduction"
+description: "Overview of GameTemplate — what it is, who it's for, and what problems it solves."
+---
+
+## What is GameTemplate?
+
+GameTemplate is a C++ Monte Carlo simulation framework for casino slot and Slingo games, built by **7 Bridges Maths**. It provides a structured, reusable foundation for implementing and verifying the math behind real-money gaming titles — covering everything from reel spin logic and win evaluation to RTP (Return to Player) measurement and regulatory cap enforcement.
+
+The framework is distributed as a **GitHub template repository**. When you create a new repo from the template, a GitHub Actions workflow (`setup-template.yml`) automatically fires on the first push to `main` and renames every `GameTemplate` occurrence — in file contents, file names, and directory names — to match your new repository name. After that rename commit, the workflow deletes itself, leaving a clean project with your game's name throughout.
+
+## Who is it for?
+
+GameTemplate is aimed at **game math developers and studios** who need to:
+
+- Rapidly prototype and verify slot or Slingo game mechanics
+- Run large-scale Monte Carlo simulations to confirm RTP targets
+- Produce structured JSON output for math review and compliance documentation
+- Maintain a consistent, auditable codebase across multiple game titles
+
+## Inheritance hierarchy
+
+Your game is built by extending the framework's class hierarchy. The base `Game` class provides the MT19937-64 RNG, win-capping logic, and weighted sampling utilities. `Slot` (or `Slingo`) adds the screen, reel sets, and evaluation helpers. Your game-specific code lives in the leaf classes:
+
+```
+Game
+├── Slot ─── YourGame
+│               ├── YourGame_config  (extends Slot_config)
+│               └── YourGame_stats   (extends Game_statistics)
+└── Slingo
+```
+
+## Key capabilities
+
+| Capability | Detail |
+|---|---|
+| Game types | Paylines, Ways, Cluster, Slingo, and custom types via the `type` field in `info.csv` |
+| RNG | `mt19937_64` — 64-bit Mersenne Twister seeded from `info.csv` or a fixed seed for reproducibility |
+| Configuration | All game parameters loaded from CSV files at runtime — no recompile needed for math changes |
+| Win cap | Variadic `cap_wins()` enforces a regulatory maximum win across multiple win sources |
+| Output | JSON results file named `_rtp_[rtp]__[timestamp]__[game_name]_v[version].json` |
+| Compile-time modes | `LOG_PLAYS`, `LOG_PROTO`, and `WINS_SYNCHRO` flags enable logging and synchronisation builds |
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a simulation running from scratch in minutes.
+  </Card>
+  <Card title="Project structure" icon="folder-tree" href="/project-structure">
+    Understand every file and class in the repository.
+  </Card>
+</CardGroup>

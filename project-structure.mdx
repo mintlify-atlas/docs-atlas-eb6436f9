@@ -1,0 +1,100 @@
+---
+title: "Project structure"
+description: "How the GameTemplate repository is organized and the role of each component."
+---
+
+## Repository layout
+
+```
+GameTemplate/                        ← repository root
+├── .github/
+│   └── workflows/
+│       └── setup-template.yml       ← auto-rename workflow (deletes itself after first run)
+├── .gitignore
+├── GameTemplate.sln                 ← Visual Studio solution
+├── packages/
+│   └── nlohmann.json.3.11.2/        ← bundled JSON library (NuGet)
+└── GameTemplate/                    ← Visual Studio project directory
+    ├── GameTemplate.vcxproj
+    ├── GameTemplate.vcxproj.filters
+    ├── packages.config
+    ├── CommonLib/                   ← reusable framework library
+    │   ├── include/                 ← public headers
+    │   └── src/                    ← implementation files
+    ├── src/                         ← your game-specific code
+    └── game/                        ← runtime working directory
+        ├── config/                  ← CSV configuration files (you create this)
+        └── results/                 ← JSON simulation output (auto-created)
+```
+
+## CommonLib — the framework library
+
+`CommonLib/` is the reusable engine. Its `include/` and `src/` directories mirror each other with one header and one `.cpp` per class.
+
+### Core classes
+
+| Class | Role |
+|---|---|
+| `Game` | Base class: MT19937-64 RNG, `stake`, `cap`, weighted sampling (`sample`, `sample_index`, `sample_rc`), variadic `cap_wins()` |
+| `Slot` | Extends `Game`: screen array, reel-set management, `clear_screen()`, `drop_new_symbols()`, `get_ways_win()`, `get_lines_win()`, `generate_all_symbols_combinations()` |
+| `Slingo` | Extends `Game`: Slingo-specific board and number-drawing logic |
+| `Slot_config` | Loads and owns all configuration data: reel sets, symbol list, paytable, paylines, JSON config representation |
+| `Reel_set` | Holds one set of reel strips and exposes `spin(rng)` to pick random stops |
+| `Symbol` | Stores symbol ID, short name (≤ 3 chars), and full name |
+| `Paylines` | Parses `paylines.csv` and evaluates winning lines on the screen |
+| `Prize` | Represents a single prize: symbol, count, and pay value |
+| `Weighted_values` | Efficient weighted random sampling; use `sample(rng)` for repeated draws |
+| `Game_statistics` | Accumulates simulation metrics: total payout, play count, hit frequency, RTP; exposes `count_stats_play()`, `print_stats()`, `stats_to_json()` |
+| `Game_info` | Parses `info.csv` and holds all runtime parameters (`n_reels`, `number_of_plays`, `bet`, `cap`, `seed`, `mode`, etc.) |
+| `rnd_log` | Records per-play RNG state for debugging; only compiled in when `LOG_PLAYS` is defined |
+| `Win_and_RTP_distribution` | Tracks the full distribution of win amounts for histogram output in results |
+
+## src/ — your game implementation
+
+| File | Role |
+|---|---|
+| `GameTemplate.h` / `GameTemplate.cpp` | The game class itself. Inherits from `Slot`. Contains `init()`, `play()`, and `generate_json()`. This is where you write spin and win-evaluation logic. |
+| `GameTemplate_config.h` / `GameTemplate_config.cpp` | Extends `Slot_config`. Owns `w_reel_sets_main` (`Weighted_values`) and any additional config state your game needs. |
+| `GameTemplate_stats.h` / `GameTemplate_stats.cpp` | Extends `Game_statistics`. Override `stats_to_json()` and `print_stats()` to add game-specific stat fields. |
+| `GameTemplate_main.cpp` | Entry point (`main()`). Locates config files, calls `load_info()`, seeds the RNG, runs `play()`, and reports execution time. |
+
+## Inheritance diagram
+
+```
+Game
+├── Slot ─── GameTemplate
+│               ├── GameTemplate_config  (extends Slot_config)
+│               └── GameTemplate_stats   (extends Game_statistics)
+└── Slingo
+```
+
+`GameTemplate` holds a `GameTemplate_config config` and `GameTemplate_stats stats` as public members. `init()` delegates to `config.init(info)` and `Slot::init(...)`, then seeds stats and optional logging. `play()` runs the simulation loop and finishes by calling `generate_json(info)` to write results.
+
+## The game/ directory
+
+The `game/` directory is the **runtime working directory** for the simulation executable. It contains only a `.gitkeep` in the template; you populate it before running:
+
+```
+game/
+├── config/           ← place all CSV files here
+│   ├── info.csv
+│   ├── reel_set__0.csv
+│   ├── symbols.csv
+│   ├── paytable.csv
+│   └── paylines.csv  ← Paylines games only
+└── results/          ← created automatically by generate_json()
+```
+
+The executable first looks for `game\config\info.csv`. If not found it falls back to `config\info.csv`, so you can also run it from inside `game/` directly.
+
+## Compile-time flags
+
+Three preprocessor flags change build behaviour. They map to the named solution configurations in `GameTemplate.sln`:
+
+| Flag | Solution config prefix | Effect |
+|---|---|---|
+| `LOG_PLAYS` | `z_Logs_*` | Compiles in the `rnd_log randomLogs` member and calls `randomLogs.init(info)` inside `init()`. Records per-play RNG state for debugging and reproducibility. |
+| `LOG_PROTO` | `z_Proto_*` | Enables prototype logging output during simulation. |
+| `WINS_SYNCHRO` | `z_Synchro_*` | Enables synchronised win tracking, useful for multi-threaded or deterministic comparison runs. |
+
+All three flags are defined only in their respective configurations — standard `Debug` and `Release` builds compile none of them.

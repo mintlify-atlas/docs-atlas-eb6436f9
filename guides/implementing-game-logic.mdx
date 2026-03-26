@@ -1,0 +1,251 @@
+---
+title: "Implementing game logic"
+description: "How to extend GameTemplate to implement your game's mechanics."
+---
+
+GameTemplate uses a three-class extension pattern. Each layer inherits from its CommonLib base and adds game-specific behavior. The template project ships ready-to-extend stubs for all three.
+
+<Tip>
+  Keep `play()` as a thin orchestrator — delegate each feature (free spins, bonus round, cascades) to dedicated methods so the main loop stays readable.
+</Tip>
+
+---
+
+## 1. Your game class
+
+Inherits from `Slot` (or `Slingo` for Slingo-style games). Must declare and implement:
+
+- `void init(Game_info info)` — called once before the simulation loop.
+- `void play(unsigned long long plays)` — the simulation loop.
+
+```cpp
+// MyGame.h
+#pragma once
+#include "../CommonLib/include/Slot.h"
+#include "MyGame_config.h"
+#include "MyGame_stats.h"
+
+class MyGame : public Slot
+{
+public:
+    void generate_json(Game_info info);
+    MyGame_config config;
+    MyGame_stats stats;
+
+    void init(Game_info info);
+    void play(unsigned long long plays);
+
+private:
+    unsigned bet_for_cap;
+    unsigned plays_to_print;
+};
+```
+
+---
+
+## 2. Your config class
+
+Inherits from `Slot_config`. Add any additional `Weighted_values` objects, extra reel sets, or other configuration members. Call `Slot_config::init(info)` at the start of your own `init()`.
+
+Override `load_paytable()` (virtual, private in `Slot_config`) only if you need a non-standard paytable format.
+
+```cpp
+// MyGame_config.h
+#pragma once
+#include "../CommonLib/include/Slot_config.h"
+
+class MyGame_config : public Slot_config
+{
+public:
+    void init(Game_info info);
+
+    Weighted_values w_reel_sets_main;   // required by play()
+    Weighted_values w_bonus_trigger;    // example: bonus probability table
+};
+```
+
+```cpp
+// MyGame_config.cpp
+void MyGame_config::init(Game_info info)
+{
+    Slot_config::init(info);   // loads symbols, paytable, reel sets
+
+    w_reel_sets_main.init(info.folder_config + "\\w_reel_sets_main.csv");
+    w_bonus_trigger.init(info.folder_config + "\\w_bonus_trigger.csv");
+
+    json_config["w_reel_sets_main"] = w_reel_sets_main.to_json();
+}
+```
+
+---
+
+## 3. Your stats class
+
+Inherits from `Game_statistics`. Override `stats_to_json()` and `print_stats()` to include game-specific counters and metrics.
+
+```cpp
+// MyGame_stats.h
+#pragma once
+#include "../CommonLib/include/Game_statistics.h"
+
+class MyGame_stats : public Game_statistics
+{
+public:
+    json stats_to_json(unsigned stake);
+    void print_stats(unsigned stake);
+
+    // Game-specific counters:
+    unsigned long long free_spin_triggers = 0;
+    unsigned long long total_fs_win = 0;
+};
+```
+
+---
+
+## 4. The init() method
+
+The real implementation from `GameTemplate::init()` (`GameTemplate.cpp:32`):
+
+```cpp
+void GameTemplate::init(Game_info info)
+{
+    config.init(info);
+    Slot::init(info.n_reels, info.number_of_trackers, info.number_of_rows, info.bet,
+               (unsigned)config.symbols_list.size());
+
+    if (info.type == "Paylines")
+        Slot::generate_all_symbols_combinations(config, 0);
+
+    for (int i = 0; i < (int)info.reel_heights.size(); i++) {
+        reels_heights[i] = info.reel_heights[i];
+    }
+
+    stats.starting_balance = info.starting_balance;
+    stats.current_balance  = info.starting_balance;
+
+    bet_for_cap    = info.bet_for_cap;
+    plays_to_print = info.plays_to_print;
+}
+```
+
+Key points:
+- `config.init(info)` must be called **before** `Slot::init()` because it loads the symbol list whose size is passed to `Slot::init()`.
+- `generate_all_symbols_combinations()` pre-computes the `paytable_lines` 6-D lookup table. Only needed for Paylines games using the fast evaluator.
+- `reels_heights` is populated here for variable-height (Megaways-style) reels.
+
+---
+
+## 5. The play() loop
+
+The full stub from `GameTemplate::play()` (`GameTemplate.cpp:59`) with annotations:
+
+```cpp
+void GameTemplate::play(unsigned long long plays)
+{
+    unsigned using_reel_set;
+    unsigned long long base_win;
+    unsigned long long new_win;
+    unsigned total_win;
+
+    for (unsigned long long iter = 0; iter < plays; iter++)
+    {
+        // Console stats refresh
+        if (iter > 0 && !(iter % plays_to_print))
+        {
+            system("CLS");
+            cout << endl << "Play mode: " << info.mode << endl;
+            stats.print_stats(stake);
+        }
+
+        // --- Reset per-play variables ---
+        base_win  = 0;
+        new_win   = 0;
+        total_win = 0;
+
+        // Clear the screen (all cells set to -1)
+        clear_screen();
+
+        // --- Select reel set ---
+        using_reel_set = config.w_reel_sets_main.sample(rng);
+
+        // --- Spin and fill screen ---
+        config.reel_sets[using_reel_set].spin(rng);
+        drop_new_symbols(config.reel_sets[using_reel_set]);
+
+        // --- Add your game logic here ---
+        // e.g. base_win = get_ways_win(config);
+        //      cap_wins(base_win);
+        //      total_win = base_win;
+
+        // --- Record statistics ---
+        stats.count_stats_play(total_win, stake);
+    }
+
+    // Serialize results to JSON
+    generate_json(info);
+
+    system("CLS");
+    cout << endl << "Play mode: " << info.mode << endl;
+    stats.print_stats(stake);
+}
+```
+
+The recommended order for each iteration:
+
+1. Reset all per-play variables.
+2. Call `clear_screen()`.
+3. Select reel set with `config.w_reel_sets_main.sample(rng)`.
+4. Spin: `config.reel_sets[using_reel_set].spin(rng)`.
+5. Fill screen: `drop_new_symbols(config.reel_sets[using_reel_set])`.
+6. Evaluate wins (see [Win evaluation](/guides/win-evaluation)).
+7. Trigger and resolve bonus features (see [Free spins and features](/guides/free-spins-and-features)).
+8. Apply win cap with `cap_wins()`.
+9. Call `stats.count_stats_play(total_win, stake)`.
+
+After the loop, call `generate_json(info)` then `stats.print_stats(stake)`.
+
+---
+
+## 6. Win capping
+
+`cap_wins()` is a variadic template defined in `Game.h`. It caps the combined total of all passed win values to `cap × bet_for_cap`, zeroing out later arguments once the cap is reached.
+
+```cpp
+unsigned long long base_win  = get_ways_win(config);
+unsigned long long bonus_win = get_scatter_wins(config);
+
+cap_wins(base_win, bonus_win);  // base_win is capped first
+
+total_win = base_win + bonus_win;
+```
+
+**Order matters.** The first argument is consumed first; if it already exceeds the cap, every subsequent argument is set to `0`. If the first argument fits within the cap, the second is consumed next, and so on.
+
+---
+
+## 7. Symbol multipliers
+
+`symbol_multipliers[col][row]` holds a per-cell multiplier value. It is used by `get_lines_win_with_multiplier()` and by the overloaded `get_ways_win(config, multipliers)` that accepts a per-reel multiplier vector.
+
+Call `reset_symbol_multipliers()` at the start of each play (or at the start of each feature phase) to clear all values to their default.
+
+```cpp
+reset_symbol_multipliers();
+
+// ... spin and fill screen ...
+
+// Example: symbol ID 5 lands as a 3× multiplier wild
+for (int row = 0; row < nrows; row++) {
+    for (int col = 0; col < nreels; col++) {
+        if (screen[row][col] == MULTIPLIER_SYMBOL_ID) {
+            symbol_multipliers[row][col] = 3;
+        }
+    }
+}
+
+unsigned win = get_lines_win_with_multiplier(config, multiplicative);
+```
+
+The `multiplier` enum has two values:
+- `additive` — multipliers on participating cells are summed.
+- `multiplicative` — multipliers on participating cells are multiplied together.

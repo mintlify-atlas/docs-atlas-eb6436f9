@@ -1,0 +1,189 @@
+---
+title: "Statistics and RTP"
+description: "Understanding and using the Game_statistics class to measure simulation outcomes."
+---
+
+`Game_statistics` (defined in `CommonLib/include/Game_statistics.h`) accumulates all measurement data during a simulation. `GameTemplate_stats` extends it with game-specific overrides while delegating to the same core logic.
+
+Call `count_stats_play()` once per play. After the simulation finishes, call `stats_to_json()` to produce the results object, or `print_stats()` to display a summary on the console.
+
+## Public counters
+
+| Member | Type | Description |
+|---|---|---|
+| `plays` | `unsigned long long` | Total number of plays simulated. |
+| `hits` | `unsigned long long` | Plays where the win was greater than zero. |
+| `total_payout` | `unsigned long long` | Sum of all wins with the cap applied on each play that exceeds the cap. |
+| `total_payout_without_cap` | `unsigned long long` | Sum of all wins with no cap applied. |
+| `max_payout` | `unsigned long long` | Highest single-play win observed during the simulation. |
+| `total_payout_sq` | `double` | Sum of squared wins — used internally to compute standard deviation. |
+
+## Per-prize tracking
+
+Two arrays track hits per prize index, split by game phase:
+
+```cpp
+unsigned long long prize_hits_base[MAX_NUMBER_OF_PRIZES]; // base game
+unsigned long long prize_hits_fs[MAX_NUMBER_OF_PRIZES];   // free spins
+```
+
+`MAX_NUMBER_OF_PRIZES` is 100. Populate these arrays inside your game logic to enable per-symbol or per-prize RTP breakdowns.
+
+## Session tracking
+
+Session statistics simulate a player starting with a fixed balance and playing until they either lose it all or double it.
+
+| Member | Description |
+|---|---|
+| `starting_balance` | Initial balance for each session (set from `info.starting_balance`; defaults to `100 * bet`). |
+| `current_balance` | Running balance within the current session. |
+| `total_sessions` | Number of completed sessions. |
+| `sessions_loosing` | Sessions that ended because the balance fell below one stake. |
+| `sessions_duplicating` | Sessions that ended because the balance reached `2 × starting_balance`. |
+
+## Key methods
+
+### count_stats_play
+
+Must be called after every play. Three overloads are available:
+
+```cpp
+// Standard: updates plays, hits, total_payout, coinout distribution, and session stats
+void count_stats_play(unsigned long long win, unsigned stake);
+
+// Phase-aware: segregates coinout into base (is_fs=false) or free-spin (is_fs=true) buckets
+void count_stats_play(unsigned long long win, bool is_fs);
+
+// Per-reel-set: calls the standard overload and additionally tracks win/hits by reel set index
+void count_stats_play(unsigned long long win, unsigned stake, unsigned using_reelset);
+```
+
+Typical usage:
+
+```cpp
+// At the end of each play loop iteration:
+stats.count_stats_play(total_win, stake);
+
+// Also track phase breakdown (call separately for base and free-spin wins):
+stats.count_stats_play(base_win,  false); // base game
+stats.count_stats_play(fs_win,    true);  // free spins
+```
+
+### stats_to_json
+
+```cpp
+json stats_to_json(unsigned stake);
+```
+
+Returns a JSON object with all statistics. Called by `generate_json()` to produce the `stats` key of the results file.
+
+### print_stats
+
+```cpp
+void print_stats(unsigned stake);
+```
+
+Prints to console: total plays, RTP, hit ratio, standard deviation, cap difference, max exposure, win/RTP distribution table, and session percentages. Called every `plays_to_print` plays and once at simulation end.
+
+### standard_deviation
+
+```cpp
+double standard_deviation(unsigned stake);
+```
+
+Returns the per-play standard deviation normalised by `stake`, computed as:
+
+```
+σ = sqrt( (Σx² / n  −  (Σx / n)²) × n/(n−1) ) / stake
+```
+
+This is the corrected sample standard deviation of the win-to-stake ratio.
+
+### test_rtp_confidence_95
+
+```cpp
+void test_rtp_confidence_95(double rtp_target, unsigned stake);
+```
+
+Checks whether the simulated RTP falls within the 95% confidence interval of `rtp_target`. The interval is:
+
+```
+rtp_target ± 1.96 × σ / √plays
+```
+
+Prints `RTP OK`, `RTP ALTO` (too high), or `RTP BAJO` (too low) to the console. Call this after the simulation completes.
+
+### reset
+
+```cpp
+void reset();
+```
+
+Clears `plays`, `total_payout`, `hits`, `max_payout`, and `total_payout_sq`. Useful when running multiple sub-simulations with shared statistics objects.
+
+### max_win_hits
+
+```cpp
+unsigned max_win_hits();
+```
+
+Returns how many times `max_payout` was achieved during the simulation.
+
+## RTP calculation
+
+```
+RTP = total_payout / (plays × stake)
+```
+
+This is the return-to-player as a decimal (e.g. `0.96` for 96%). The capped payout is always used for the headline RTP; the uncapped figure is available via `total_payout_without_cap`.
+
+## Win distribution
+
+### Exact distribution (coinout)
+
+Internally `Game_statistics` maintains an array:
+
+```cpp
+unsigned coinout[PAYOUTS_LIST_SIZE]; // PAYOUTS_LIST_SIZE = 100000
+```
+
+`coinout[i]` is the number of plays whose win was exactly `i` credits. Wins of 100,000 credits or more are stored in the `bigger_wins` vector instead.
+
+Phase-split variants (`coinout_no_fs` / `coinout_fs`) track the same distribution separately for base-game and free-spin plays respectively.
+
+### Rank-based distribution
+
+Wins are also bucketed into 12 ranges based on win-to-stake multiples. The breakpoints (in units of stake) are:
+
+```
+0, 1, 2, 5, 10, 20, 30, 50, 100, 200, 500, 1000
+```
+
+Intervals are open on the left and closed on the right, e.g. `(0, 1]`, `(1, 2]`, ..., `(500, 1000]`, with an overflow bucket for wins above `1000×`. This table is printed by `print_stats()` and is included in the JSON output.
+
+## JSON output reference
+
+The `stats` object written by `stats_to_json(stake)` contains:
+
+```json
+{
+  "plays":                <total plays>,
+  "hits":                 <plays with win > 0>,
+  "total_payout":         <sum of capped wins>,
+  "max_payout":           <highest single-play win>,
+  "total_payout_sq":      <sum of squared wins>,
+  "hit_rate":             <hits / plays>,
+  "rtp_total":            <total_payout / plays / stake>,
+  "sd":                   <standard deviation>,
+  "coinOut":              [[win, hits], ...],
+  "coinOut_no_fs":        [[win, hits], ...],
+  "coinOut_fs":           [[win, hits], ...],
+  "starting_balance":     <session starting balance>,
+  "current_balance":      <balance at simulation end>,
+  "total_sessions":       <completed sessions>,
+  "sessions_loosing":     <sessions ending in loss>,
+  "sessions_duplicating": <sessions ending in doubling>
+}
+```
+
+`coinOut` (and its phase variants) is a sparse list of `[win_amount, hit_count]` pairs, sorted ascending by win amount. Zero-win plays appear as `[0, non_winning_plays]`.

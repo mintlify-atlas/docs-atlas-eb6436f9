@@ -1,0 +1,188 @@
+---
+title: "Game"
+description: "The base class for all GameTemplate games. Provides RNG, stake, win capping, and weighted sampling."
+---
+
+The `Game` class is the root base class for all GameTemplate game types. It wraps a 64-bit Mersenne Twister RNG, provides weighted sampling primitives, and enforces configurable win caps across multiple prize pools.
+
+Derived classes ([`Slot`](/api/slot), [`Slingo`](/api/slingo)) extend `Game` with game-specific mechanics.
+
+---
+
+## Initialization
+
+<ParamField path="stake" type="unsigned" required>
+  Bet value in credits to use during Monte Carlo simulation. Stored in `Game::stake`. Default value is `100`.
+</ParamField>
+
+### `void init(unsigned stake)`
+
+Seeds the MT19937-64 RNG from `std::random_device`, records the seed in `rng_seed`, and sets the stake.
+
+```cpp
+game.init(100); // stake = 100 credits
+```
+
+---
+
+### `void saveRNGstate()`
+
+Persists the current internal state of `rng` to `{info.folder_results}/rng_state.txt`. Creates the results folder if it does not exist. Use this before suspending a long simulation to allow resumption from the same point.
+
+---
+
+### `void loadRNGstate()`
+
+Restores the RNG state previously written by `saveRNGstate()` from `{info.folder_results}/rng_state.txt`. The generator will produce the same sequence it would have produced had the state never been saved.
+
+---
+
+## Random Number Generation
+
+### `unsigned random(unsigned n)`
+
+Returns a uniformly distributed integer in **[0, n&minus;1]** using `std::uniform_int_distribution`.
+
+<ParamField path="n" type="unsigned" required>
+  Exclusive upper bound. Must be greater than `0`.
+</ParamField>
+
+**Returns:** `unsigned` — a random integer in `[0, n-1]`.
+
+```cpp
+unsigned reel_stop = game.random(strip_length);
+```
+
+---
+
+### `float random_real(float t)`
+
+Returns a uniformly distributed floating-point number in **[0, t]** using `std::uniform_real_distribution<float>`.
+
+<ParamField path="t" type="float" required>
+  Upper bound of the interval. Must be ≥ 0; behavior is undefined if `t < 0`.
+</ParamField>
+
+**Returns:** `float` — a random value in `[0, t]`.
+
+<Warning>
+  If `t` is negative, the behavior is undefined.
+</Warning>
+
+---
+
+### `int sample(vector<int> x, vector<unsigned> weights)`
+
+Performs a weighted random draw and returns the **value** selected from `x`.
+
+<ParamField path="x" type="vector<int>" required>
+  Vector of possible outcome values.
+</ParamField>
+
+<ParamField path="weights" type="vector<unsigned>" required>
+  Non-negative integer weights corresponding to each element of `x`. Must be the same length as `x`. All weights must be greater than zero.
+</ParamField>
+
+**Returns:** `int` — the randomly selected value from `x` according to the weight distribution.
+
+<Note>
+  For high-frequency sampling in tight loops, prefer the `Weighted_values` helper class, which pre-computes cumulative sums for better performance.
+</Note>
+
+```cpp
+vector<int>      outcomes = { 0, 1, 2 };
+vector<unsigned> weights  = { 70, 20, 10 };
+int result = game.sample(outcomes, weights); // 70% → 0, 20% → 1, 10% → 2
+```
+
+---
+
+### `int sample_index(vector<unsigned> weights)`
+
+Performs a weighted random draw and returns the **index** within `weights` that was selected.
+
+<ParamField path="weights" type="vector<unsigned>" required>
+  Non-empty vector of positive integer weights. The probability of selecting index `i` is `weights[i] / sum(weights)`.
+</ParamField>
+
+**Returns:** `int` — the zero-based index selected according to the weight distribution.
+
+```cpp
+vector<unsigned> reel_weights = { 50, 30, 20 };
+int chosen = game.sample_index(reel_weights); // 0, 1, or 2
+```
+
+---
+
+### `void sample_rc(vector<vector<unsigned>> weights, unsigned& row, unsigned& col)`
+
+Performs a 2-D weighted draw over a matrix and writes the selected cell coordinates into `row` and `col` by reference.
+
+<ParamField path="weights" type="vector<vector<unsigned>>" required>
+  Non-empty matrix of non-negative weights. The probability of selecting cell `(i, j)` is proportional to `weights[i][j]`.
+</ParamField>
+
+<ParamField path="row" type="unsigned&" required>
+  Output parameter. Receives the row index of the selected cell.
+</ParamField>
+
+<ParamField path="col" type="unsigned&" required>
+  Output parameter. Receives the column index of the selected cell.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+  If the weights matrix is empty, behavior is undefined.
+</Warning>
+
+```cpp
+unsigned r, c;
+game.sample_rc(grid_weights, r, c);
+```
+
+---
+
+## Win Capping
+
+### `template <typename T, typename... Ts> void cap_wins(T& first, Ts&... rest)`
+
+Variadic template that enforces a total win ceiling of `cap * info.bet_for_cap` across all provided win values. Arguments are processed left-to-right:
+
+1. If `first` alone exceeds the limit, it is clamped to the limit and all remaining arguments are set to `0`.
+2. Otherwise the function accumulates values until their running sum first exceeds the limit. The argument that causes the overflow is reduced to the remainder (`limit - sum_before`) and all subsequent arguments are zeroed.
+
+<ParamField path="first" type="T&" required>
+  The first (highest-priority) win value. Modified in place.
+</ParamField>
+
+<ParamField path="rest" type="Ts&...">
+  Additional win values in priority order. Each is modified in place. Arguments beyond the one that pushes the total over the cap are zeroed.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+  Argument order matters. Earlier arguments have priority; once the cap is reached, all later arguments are zeroed regardless of their original values.
+</Warning>
+
+```cpp
+unsigned long long base_win  = 500;
+unsigned long long bonus_win = 3000;
+cap_wins(base_win, bonus_win);  // cap=50, bet=100 → limit=5000
+// If base_win + bonus_win > 5000, bonus_win is reduced
+// If base_win alone > 5000, it is set to 5000 and bonus_win = 0
+```
+
+---
+
+## Public Data Members
+
+| Member | Type | Description |
+|---|---|---|
+| `game_name` | `string` | Human-readable name of the game. |
+| `rng` | `mt19937_64` | 64-bit Mersenne Twister PRNG instance. Seeded by `init()`. |
+| `stake` | `unsigned` | Bet value in credits. Default: `100`. |
+| `cap` | `unsigned long long` | Maximum win multiplier. The total win ceiling is `cap * info.bet_for_cap`. |
+| `rng_seed` | `unsigned long long` | The seed used to initialize `rng`. Useful for logging and reproducibility. |
+| `info` | `Game_info` | Struct containing game configuration fields including `bet_for_cap`, `folder_results`, and `folder_config`. |

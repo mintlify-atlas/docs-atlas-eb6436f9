@@ -1,0 +1,151 @@
+---
+title: 'rnd_log'
+description: 'Records random draws and play details to log files for audit and debugging. Enabled by defining LOG_PLAYS.'
+---
+
+`rnd_log` writes two parallel log files — a random-draw trace (`randomLog.txt`) and a screen/win trace (`gameDetails.txt`) — for the first `number_of_logs` plays of a simulation. It lives in `CommonLib/include/rnd_log.h`.
+
+## Enabling
+
+Define `LOG_PLAYS` at compile time to include `rnd_log` in the game class:
+
+```cpp
+#define LOG_PLAYS
+```
+
+Without this define, all `rnd_log` members are excluded from the game class via preprocessor guards. This keeps production builds free of any logging overhead.
+
+<Warning>
+Enabling `LOG_PLAYS` generates two log files that grow quickly. For long simulations (tens of millions of plays) keep `number_of_logs` small — the default of 10,000 is appropriate for production validation runs. Large values will produce very large files and will pause execution once the limit is reached.
+</Warning>
+
+## Control
+
+| Member | Type | Default | Description |
+|---|---|---|---|
+| `number_of_logs` | `unsigned long long` | `10'000` | Number of plays to log before closing the files and halting. Set to `0` to disable logging entirely. |
+
+## Initialisation
+
+```cpp
+void init(Game_info info);
+```
+
+Opens both log file handles and initialises internal state. Log files are written to a `logs/` subdirectory alongside `folder_config`:
+
+- `logs/randomLog.txt` — random-draw trace
+- `logs/gameDetails.txt` — screen and win trace
+
+Call `init` once before the simulation loop, after `load_info` has populated the `Game_info` object.
+
+## Logging random values
+
+```cpp
+void log_rnd(Weighted_values w);
+```
+
+Appends `w.name:w.last_random:w.total_weight,` to the random log buffer. Call this immediately after each weighted draw.
+
+---
+
+```cpp
+void log_rnd(string mask, unsigned result, unsigned range);
+```
+
+Direct-entry variant. Appends `mask:result:range,` to the log buffer. Use when logging a raw RNG draw that is not wrapped in a `Weighted_values` object.
+
+---
+
+```cpp
+void log_rnd_without_replacement(Weighted_values w, unsigned sample_size);
+```
+
+Logs a draw-without-replacement result from `w` for a sample of size `sample_size`. Delegates to `w.log_without_replacement(sample_size)`.
+
+## Logging stops and screen
+
+```cpp
+void log_stops(Reel_set reel_set);
+```
+
+Logs all reel stops for every reel and tracker in `reel_set`. For tracker reels, a correction of `(size - 3)` is applied to the stop position because the stop is already advanced for the next spin by the time this is called. Assumes a maximum of 4 tracker cells per tracker reel.
+
+---
+
+```cpp
+void log_stops(Reel_set reel_set, int reel);
+```
+
+Logs the stop for a single reel index `reel`. Does not handle tracker reels.
+
+---
+
+```cpp
+void log_stops(Reel_set reel_set, string mask, vector<int> offsets);
+```
+
+Logs all reel and tracker stops using `mask` as the field label and applying per-reel `offsets` to the recorded stop positions. Useful when logging a secondary reel set or a virtual stop offset.
+
+## Logging spin results
+
+```cpp
+void log_spin_win(
+    unsigned long long spin_win,
+    vector<vector<int>> screen,
+    string additional_info = "-"
+);
+```
+
+Logs an intermediate win (e.g. one step in a cascade) along with the current screen layout. Appends the result to the in-memory buffer; does not flush to disk until `log_total_win` is called.
+
+---
+
+```cpp
+void log_total_win(
+    unsigned long long total_win,
+    vector<vector<int>> screen,
+    string additional_info = "-"
+);
+```
+
+Logs the final resolved win for the play and flushes both buffers to disk. Increments the internal play counter. When the counter reaches `number_of_logs`, both files are closed and the process halts.
+
+<Note>
+Use the `additional_info` parameter to identify the game phase in the log file. Conventional values are `"basegame"`, `"freespin"`, and `"cascade"`. The string appears as a field inside the JSON-like screen block written to `gameDetails.txt`, making it easy to grep for specific phases during audit.
+</Note>
+
+## Flushing
+
+```cpp
+void resume();
+```
+
+Clears the in-memory string buffers and resets the per-play spin counter. Call this to discard a partially built log entry (e.g. after an error recovery) without flushing it to disk.
+
+## Typical usage
+
+Wrap all logging calls in `#ifdef LOG_PLAYS` so they compile away in production builds:
+
+```cpp
+#ifdef LOG_PLAYS
+randomLogs.log_stops(config.reel_sets[using_reel_set]);
+randomLogs.log_rnd(config.w_reel_sets_main);
+randomLogs.log_spin_win(base_win, screen, "basegame");
+randomLogs.log_total_win(total_win, screen, "final");
+#endif
+```
+
+For games with free spins or cascades, call `log_spin_win` for each intermediate result and `log_total_win` once at the end of the full play resolution:
+
+```cpp
+#ifdef LOG_PLAYS
+// After each cascade step:
+randomLogs.log_spin_win(cascade_win, screen, "cascade");
+
+// After free spins:
+randomLogs.log_spin_win(fs_win, screen, "freespin");
+
+// Once at play resolution:
+randomLogs.log_total_win(total_win, screen, "final");
+#endif
+```

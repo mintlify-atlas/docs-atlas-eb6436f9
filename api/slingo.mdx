@@ -1,0 +1,194 @@
+---
+title: "Slingo"
+description: "Extends Game for Slingo (bingo-slot hybrid) games."
+---
+
+`Slingo` extends [`Game`](/api/game) directly — **not** `Slot` — to model the Slingo hybrid format where a slot spin reveals numbers that are then matched against a bingo card. The bingo card grid (`screen`) and reel management are distinct from the slot reel grid used by [`Slot`](/api/slot).
+
+---
+
+## Initialization
+
+### `void init(unsigned n_reels, unsigned n_rows, unsigned stake, unsigned spins_base, unsigned extra_spins, string config_folder)`
+
+Full initializer. Calls `Game::init(stake)` internally, then:
+
+1. Sets `n_reels` and `n_rows`.
+2. Loads symbol definitions from `symbols.csv` in `config_folder` (see `symbols_list`).
+3. Scans `symbols_list` to assign `joker_id`, `super_joker_id`, and `free_spin_id`.
+4. Allocates `screen` and `card_numbers` as `n_rows × n_reels` grids initialized to `-1`.
+5. Sets `spins_standard = spins_base` and `spins_purchase = extra_spins`.
+6. Allocates `spin_results`, `jokers`, and `super_jokers` vectors of length `n_reels`.
+7. Reads reel strips from `slingo_reel_set_base.csv` into `reel_set_base` and from `slingo_reel_set_purchase.csv` into `reel_set_purchase`.
+
+<ParamField path="n_reels" type="unsigned" required>
+  Number of reels. Also determines the width of the bingo card.
+</ParamField>
+
+<ParamField path="n_rows" type="unsigned" required>
+  Number of rows on the bingo card.
+</ParamField>
+
+<ParamField path="stake" type="unsigned" required>
+  Bet value in credits passed to `Game::init()`.
+</ParamField>
+
+<ParamField path="spins_base" type="unsigned" required>
+  Number of standard (included) spins per round, stored in `spins_standard`.
+</ParamField>
+
+<ParamField path="extra_spins" type="unsigned" required>
+  Number of purchasable extra spins per round, stored in `spins_purchase`.
+</ParamField>
+
+<ParamField path="config_folder" type="string" required>
+  Path to the configuration folder. Must contain:
+  - `symbols.csv` — symbol definitions
+  - `slingo_reel_set_base.csv` — base-game reel strips
+  - `slingo_reel_set_purchase.csv` — purchase-spin reel strips
+</ParamField>
+
+---
+
+### `void init(Game_info info)`
+
+Convenience overload that delegates to the full `init()` using fields from a `Game_info` struct.
+
+The following fields are read from `info`:
+
+| `Game_info` field | Maps to parameter |
+|---|---|
+| `info.n_reels` | `n_reels` |
+| `info.number_of_rows` | `n_rows` |
+| `info.bet` | `stake` |
+| `info.spins_base` | `spins_base` |
+| `info.spins_purchase` | `extra_spins` |
+| `info.folder_config` | `config_folder` |
+
+<ParamField path="info" type="Game_info" required>
+  Populated `Game_info` struct.
+</ParamField>
+
+---
+
+## Core Gameplay
+
+### `void play(unsigned long long plays)`
+
+Entry point for the Monte Carlo simulation loop. Override or implement this method in your derived class with the full round logic.
+
+<ParamField path="plays" type="unsigned long long" required>
+  Number of rounds to simulate.
+</ParamField>
+
+<Note>
+  The base implementation is a no-op. Your derived class is responsible for implementing the simulation body.
+</Note>
+
+---
+
+### `void spin_reels(Reel_set& reel_set)`
+
+Advances stop positions by calling `reel_set.spin(rng)`, then copies the resulting symbol IDs into `spin_results`. After this call, `spin_results[i]` contains the symbol ID at the new stop on reel `i`.
+
+<ParamField path="reel_set" type="Reel_set&" required>
+  The reel set to spin — either `reel_set_base` (standard spins) or `reel_set_purchase` (extra spins).
+</ParamField>
+
+```cpp
+// Standard spin
+slingo.spin_reels(slingo.reel_set_base);
+
+// Purchase spin
+slingo.spin_reels(slingo.reel_set_purchase);
+```
+
+---
+
+### `void optimal_strategy()`
+
+Applies optimal placement logic to resolve joker and super-joker symbols in `spin_results`. A joker can be placed on any column in the current row; a super joker can be placed anywhere on the card. The base implementation is a stub — override in your derived class with game-specific strategy.
+
+<Note>
+  Call this after `spin_reels()` and before marking numbers on the card.
+</Note>
+
+---
+
+### `void reset_screen()`
+
+Resets the bingo card by setting all cells in `screen` to `0`, clearing all marked positions for a new round.
+
+---
+
+## Public Data Members
+
+### Grid dimensions
+
+| Member | Type | Description |
+|---|---|---|
+| `n_reels` | `unsigned` | Number of reels; also the width of the bingo card. Initialized to `0`. |
+| `n_rows` | `unsigned` | Number of rows on the bingo card. Initialized to `0`. |
+| `slingo_numbers` | `unsigned long` | Range of bingo numbers drawn from. Default: `75`. |
+
+---
+
+### Spin counters
+
+| Member | Type | Description |
+|---|---|---|
+| `spins_standard` | `unsigned` | Number of standard (included) spins per round. Set by `init()`. |
+| `spins_purchase` | `unsigned` | Number of extra purchasable spins available. Set by `init()`. |
+
+---
+
+### Special symbol IDs
+
+These IDs are resolved automatically during `init()` by scanning `symbols_list` for entries whose `symbol_name` matches the canonical names below.
+
+| Member | Type | Resolved from `symbol_name` |
+|---|---|---|
+| `joker_id` | `unsigned` | `"Joker"` |
+| `super_joker_id` | `unsigned` | `"Super Joker"` |
+| `free_spin_id` | `unsigned` | `"Free Spin"` |
+
+---
+
+### Card and screen grids
+
+| Member | Type | Description |
+|---|---|---|
+| `screen` | `vector<vector<int>>` | The bingo card state grid (`n_rows × n_reels`). Each cell holds a mark status; reset to `0` by `reset_screen()`. |
+| `card_numbers` | `vector<vector<int>>` | The bingo numbers assigned to each cell of the card (`n_rows × n_reels`). Populated during round setup. |
+
+<Note>
+  Unlike `Slot::screen` which stores symbol IDs from reel strips, `Slingo::screen` represents the bingo card mark state and `card_numbers` holds the actual bingo values.
+</Note>
+
+---
+
+### Symbols and reel sets
+
+| Member | Type | Description |
+|---|---|---|
+| `symbols_list` | `vector<Symbol>` | All symbols loaded from `symbols.csv`. Each `Symbol` has a `symbol_ID`, `symbol_name`, and `short_name`. |
+| `reel_set_base` | `Reel_set` | Reel strips and stops for standard spins. Loaded from `slingo_reel_set_base.csv`. |
+| `reel_set_purchase` | `Reel_set` | Reel strips and stops for purchasable extra spins. Loaded from `slingo_reel_set_purchase.csv`. |
+
+---
+
+### Spin state
+
+| Member | Type | Description |
+|---|---|---|
+| `spin_results` | `vector<int>` | Symbol IDs produced by the most recent `spin_reels()` call. Length equals `n_reels`. |
+| `jokers` | `vector<bool>` | Flags indicating which reel positions in `spin_results` contain a joker. Length equals `n_reels`. |
+| `super_jokers` | `vector<bool>` | Flags indicating which reel positions in `spin_results` contain a super joker. Length equals `n_reels`. |
+
+---
+
+### Line tracking
+
+| Member | Type | Description |
+|---|---|---|
+| `count_lines_by_marks` | `vector<int>` | Tracks the number of completed bingo lines grouped by how many cells in that line were marked. Used for payout analysis. |

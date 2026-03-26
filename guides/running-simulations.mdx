@@ -1,0 +1,150 @@
+---
+title: "Running simulations"
+description: "How to configure and execute Monte Carlo simulations with GameTemplate."
+---
+
+GameTemplate runs Monte Carlo simulations by executing a large number of independent plays and aggregating statistics. The entry point is `main()` in `GameTemplate_main.cpp`, which wires together configuration loading, game initialization, RNG seeding, and the play loop.
+
+## The main() entry point
+
+Below is the complete `main()` with inline annotations:
+
+```cpp
+int main()
+{
+    // Allocate the game object
+    GameTemplate* game = new GameTemplate();
+
+    // Locate config files — tries "game\config" first, falls back to "config"
+    string folder_config = "game\\config";
+    string folder_results = "game\\results";
+    ifstream archivo(folder_config + "\\info.csv");
+    if (!archivo.good()) {
+        folder_config = "config";
+        folder_results = "results";
+    }
+
+    // Load info.csv — populates all Game_info fields
+    Game_info info;
+    info.load_info(folder_config);
+    info.folder_config  = folder_config;
+    info.folder_results = folder_results;
+
+    // Initialize the game (loads config CSVs, sets up reels, sessions, etc.)
+    game->init(info);
+
+    // Seed the RNG — seed=0 means random each run; seed=N gives a reproducible run
+    if (info.seed != 0) {
+        game->rng.seed(info.seed);
+        game->rng_seed = info.seed;   // stored so it appears in the JSON output
+    }
+
+    game->info = info;
+    game->cap  = info.cap;   // win cap multiple; actual cap = cap * bet_for_cap
+
+    // Run the simulation
+    game->play(info.number_of_plays);
+
+    return 0;
+}
+```
+
+## Configuring simulation length
+
+The number of plays is read from `info.csv` under the key `Simulation plays` and stored in `info.number_of_plays`. It is passed directly to `game->play()`.
+
+| Variance profile | Recommended plays |
+|---|---|
+| Low variance (many small wins) | 100 million+ |
+| High variance (bonus features, large jackpots) | 1 billion+ |
+
+More plays tighten the confidence interval around the target RTP. Use `stats.test_rtp_confidence_95()` to verify the result after the run.
+
+## Seed control
+
+The `Seed` row in `info.csv` determines RNG behavior:
+
+- **`Seed = 0`** — no explicit seeding; the RNG is initialized with hardware entropy on each run, giving different results every time.
+- **`Seed = N`** (any non-zero value) — `game->rng` is seeded with `N` and the same value is stored in `game->rng_seed`. The simulation is then fully reproducible: the same seed with the same config will produce identical output.
+
+The seed is also written into the JSON results file via `info.json_info["seed"] = rng_seed` so every results file is self-documenting.
+
+## Console progress
+
+During the play loop, `plays_to_print` controls how often the console refreshes:
+
+```cpp
+if (iter > 0 && !(iter % plays_to_print)) {
+    system("CLS");
+    cout << "Play mode: " << info.mode << endl;
+    stats.print_stats(stake);
+}
+```
+
+- `plays_to_print` is set via the `Plays to print` row in `info.csv`.
+- `info.mode` is a free-form label (e.g. `"Base"`, `"Feature"`) printed on every refresh so you can identify the simulation at a glance.
+- `stats.print_stats(stake)` outputs current RTP, hit rate, max win, standard deviation, win distribution, and session statistics.
+
+## Output file
+
+### Location
+
+Results are written to `game/results/` (or `results/` when running from the game folder). The directory is created automatically if it does not exist:
+
+```cpp
+if (!std::filesystem::exists(info.folder_results))
+    std::filesystem::create_directory(info.folder_results);
+```
+
+### Filename format
+
+```
+_rtp_<rtp>__<timestamp>__<game_name>_v<version>.json
+```
+
+Example:
+
+```
+_rtp_0.960000__1711234567__MySlotGame_v1.0.json
+```
+
+- `<rtp>` — simulated RTP as a decimal (`total_payout / plays / bet`)
+- `<timestamp>` — UNIX timestamp of when the simulation finished (`time(NULL)`)
+- `<game_name>` — value of `info.game_name` from `info.csv`
+- `<version>` — value of `info.version` from `info.csv`
+
+### JSON structure
+
+The output file has three top-level keys:
+
+```json
+{
+  "config": { ... },   // snapshot of config.json_config
+  "info":   { ... },   // info.json_info with seed added
+  "stats":  { ... }    // output of stats.stats_to_json(stake)
+}
+```
+
+See [Statistics and RTP](/guides/statistics-and-rtp) for a full description of the `stats` object.
+
+## Win cap
+
+`game->cap` is set from `info.cap` (the `Cap` row in `info.csv`). The effective maximum payout per play is:
+
+```
+actual_cap = cap * bet_for_cap
+```
+
+`bet_for_cap` is read from the `Bet for cap` row in `info.csv`. Any single-play win exceeding the cap is clamped before being added to `stats.total_payout`, but the uncapped amount is still tracked separately in `stats.total_payout_without_cap`.
+
+## Compile-time flags
+
+Three preprocessor flags change simulation behavior:
+
+| Flag | Effect |
+|---|---|
+| `LOG_PLAYS` | Enables `rnd_log` — writes random draws and spin details to log files. See [Logging and output](/guides/logging-and-output). |
+| `LOG_PROTO` | Enables prototype log format (alternative log layout). |
+| `WINS_SYNCHRO` | Enables synchronized win accumulation (multi-threaded or special evaluation paths). |
+
+Define these in the project preprocessor settings or at the top of `GameTemplate_main.cpp` before the includes.

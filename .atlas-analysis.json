@@ -1,0 +1,125 @@
+{
+  "projectType": "framework",
+  "projectName": "GameTemplate",
+  "projectDescription": "A C++ Monte Carlo simulation framework for building and analyzing casino-style slot and Slingo games, providing reusable classes for reel mechanics, paytables, statistics, and RTP calculation.",
+  "theme": "aspen",
+  "primaryColor": "#1A6B3C",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "project-structure"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/game-types",
+              "concepts/rng-and-sampling",
+              "concepts/reel-sets",
+              "concepts/paytable-and-prizes"
+            ]
+          },
+          {
+            "group": "Building a Game",
+            "pages": [
+              "guides/configuration-files",
+              "guides/implementing-game-logic",
+              "guides/win-evaluation",
+              "guides/free-spins-and-features"
+            ]
+          },
+          {
+            "group": "Simulation & Statistics",
+            "pages": [
+              "guides/running-simulations",
+              "guides/statistics-and-rtp",
+              "guides/logging-and-output"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Base Classes",
+            "pages": [
+              "api/game",
+              "api/slot",
+              "api/slingo"
+            ]
+          },
+          {
+            "group": "Configuration & Data",
+            "pages": [
+              "api/slot-config",
+              "api/reel-set",
+              "api/weighted-values",
+              "api/symbol",
+              "api/paylines",
+              "api/prize"
+            ]
+          },
+          {
+            "group": "Statistics & Logging",
+            "pages": [
+              "api/game-statistics",
+              "api/game-info",
+              "api/rnd-log"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Reusable C++ base classes for Slot and Slingo game types",
+    "MT19937-64 Mersenne Twister RNG with seed reproducibility",
+    "Multiple win evaluation modes: Paylines, Ways, Scatter pays, Clusters, Megaways",
+    "Monte Carlo simulation engine for RTP verification",
+    "Configurable paytable, reel strips, and paylines via CSV files",
+    "Win capping (variadic cap_wins) for regulatory compliance",
+    "JSON output for simulation results and game configuration",
+    "GitHub Actions workflow for template scaffolding into new projects",
+    "Weighted random sampling with and without replacement",
+    "Cascade mechanics and symbol multiplier support"
+  ],
+  "publicApiSurface": [
+    "Game::init(unsigned stake)",
+    "Game::random(unsigned n)",
+    "Game::sample(vector<int> x, vector<unsigned> weights)",
+    "Game::sample_index(vector<unsigned> weights)",
+    "Game::sample_rc(vector<vector<unsigned>> weights, unsigned& row, unsigned& col)",
+    "Game::random_real(float t)",
+    "Game::cap_wins(T& first, Ts&... rest)",
+    "Slot::init(unsigned n_reels, unsigned n_rows, unsigned stake, unsigned n_symbols)",
+    "Slot::get_screen(Reel_set& reel_set)",
+    "Slot::get_lines_win(Slot_config& config)",
+    "Slot::get_ways_win(Slot_config& config)",
+    "Slot::get_scatter_wins(Slot_config& config)",
+    "Slot::get_ways_win_both(Slot_config& config)",
+    "Slot::findClusters(Slot_config& config)",
+    "Slot::get_winning_clusters(Slot_config& config)",
+    "Slingo::init(unsigned n_reels, unsigned n_rows, unsigned stake, unsigned spins_base, unsigned extra_spins, string config_folder)",
+    "Slingo::play(unsigned long long plays)",
+    "Reel_set::init(int n_reels, string file_path)",
+    "Reel_set::spin(mt19937_64& rng)",
+    "Slot_config::init(Game_info info)",
+    "Weighted_values::init(string file_path)",
+    "Weighted_values::sample(mt19937_64& rng)",
+    "Weighted_values::sample_index(mt19937_64& rng)",
+    "Weighted_values::sample_without_replacement(mt19937_64& rng)",
+    "Game_statistics::count_stats_play(unsigned long long win, unsigned stake)",
+    "Game_statistics::stats_to_json(unsigned stake)",
+    "Game_info::load_info(string path)"
+  ]
+}

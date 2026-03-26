@@ -1,0 +1,153 @@
+---
+title: "RNG and sampling"
+description: How GameTemplate handles random number generation and weighted sampling.
+---
+
+All randomness in GameTemplate flows through a single 64-bit Mersenne Twister instance held by the `Game` base class. Every subclass (`Slot`, `Slingo`, etc.) inherits it.
+
+## The RNG instance
+
+```cpp
+mt19937_64 rng; // member of Game
+```
+
+`std::mt19937_64` is the C++ standard library's 64-bit Mersenne Twister. It produces high-quality pseudo-random numbers with a period of 2^19937 − 1.
+
+## Initialization
+
+```cpp
+void Game::init(unsigned stake);
+```
+
+Seeds the RNG from `std::random_device` (OS entropy) and sets `stake` (default `100`). The seed used is stored in `Game::rng_seed` for later reference.
+
+**Reproducible runs** — if `info.seed != 0` in `main()`, the RNG is re-seeded before the simulation loop:
+
+```cpp
+if (info.seed != 0) {
+    game->rng.seed(info.seed);
+    game->rng_seed = info.seed;
+}
+```
+
+Set `seed` in `info.csv` to replay an exact sequence of outcomes.
+
+## Primitive sampling methods
+
+These are members of `Game` and are available to all subclasses.
+
+### `random(n)` — uniform integer
+
+```cpp
+unsigned random(unsigned n);
+```
+
+Returns a uniform integer in **[0, n − 1]**. Wraps `std::uniform_int_distribution<unsigned>(0, n-1)`.
+
+### `random_real(t)` — uniform float
+
+```cpp
+float random_real(float t);
+```
+
+Returns a uniform float in **[0, t]**. `t` must be ≥ 0; negative values produce undefined behaviour.
+
+### `sample()` — one-shot weighted value
+
+```cpp
+int sample(std::vector<int> x, std::vector<unsigned> weights);
+```
+
+Selects and returns a value from `x` according to `weights`. Both vectors must have the same length and all weights must be positive. Recalculates cumulative sums on every call.
+
+### `sample_index()` — one-shot weighted index
+
+```cpp
+int sample_index(std::vector<unsigned> weights);
+```
+
+Like `sample()` but returns the selected **index** rather than the corresponding value.
+
+### `sample_rc()` — 2D weighted sampling
+
+```cpp
+void sample_rc(vector<vector<unsigned>> weights, unsigned& row, unsigned& col);
+```
+
+Flattens a 2D weight matrix, draws one cell, and writes the result into `row` and `col` by reference. Useful for picking a position on a grid.
+
+## RNG state persistence
+
+```cpp
+void saveRNGstate();
+void loadRNGstate();
+```
+
+Save and restore the full internal state of `rng`. Use these around bonus-game evaluations when you need to branch and replay alternative outcomes without corrupting the main sequence.
+
+## `Weighted_values` — pre-computed weighted sampling
+
+For anything called per spin, prefer `Weighted_values`. It pre-computes a cumulative weight array at `init()` time so each `sample()` call is a single binary search rather than a full recalculation.
+
+### Initialization
+
+**From CSV file** (row 1 = values, row 2 = weights):
+
+```cpp
+Weighted_values wv;
+wv.init("config/reel_set_weights.csv");
+```
+
+The object's `name` defaults to the file path and is used in log strings.
+
+**Programmatically:**
+
+```cpp
+wv.init({0, 1, 2}, {50, 30, 20}, "reel_selector");
+```
+
+### Sampling
+
+```cpp
+int value = wv.sample(rng);        // returns sampled value
+int index = wv.sample_index(rng);  // returns sampled index
+```
+
+`last_random` stores the raw integer drawn — used by `log()` to produce the audit string.
+
+### Sampling without replacement
+
+```cpp
+wv.sample_without_replacement(rng); // shuffles the full pool
+int v = wv.next_value();            // draw next in sequence
+```
+
+Call `sample_without_replacement()` once to produce a shuffled ordering, then call `next_value()` repeatedly to consume values one by one. Attempting to call `next_value()` past the end of the pool prints an error and pauses.
+
+### Serialization and logging
+
+```cpp
+json j   = wv.to_json();              // {"values": [...], "weights": [...]}
+string s = wv.log();                  // "name:last_random:total_weight"
+string s = wv.log_without_replacement(n); // n entries, comma-separated
+```
+
+## Performance guidance
+
+| Method | Cumulative calc | Best for |
+|--------|----------------|----------|
+| `Game::sample()` | Every call | One-off draws, rarely called |
+| `Weighted_values::sample()` | Once at `init()` | Per-spin loops, reel selection |
+
+## Example: reel set selection per spin
+
+```cpp
+// In config initialisation:
+config.w_reel_sets_main.init("config/reel_set_weights.csv");
+
+// In the play loop:
+using_reel_set = config.w_reel_sets_main.sample(rng);
+config.reel_sets[using_reel_set].spin(rng);
+```
+
+This pattern selects a reel set by weight and spins it each round without recalculating cumulative sums.

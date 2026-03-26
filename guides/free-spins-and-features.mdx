@@ -1,0 +1,165 @@
+---
+title: "Free spins and features"
+description: "Patterns for implementing free spins, cascades, multipliers, and bonus features."
+---
+
+GameTemplate does not manage free spins or bonus rounds automatically. Every feature is implemented directly inside `play()` (or in helper methods called from it) using the APIs provided by the `Slot` base class.
+
+<Note>
+  The `game/` directory ships with a `.gitkeep` placeholder. Before running a simulation, create the `config/` and `results/` subdirectories inside it, then populate `config/` with your CSV files.
+</Note>
+
+---
+
+## Free spins
+
+Free spin rounds are a second loop nested inside the main play loop. Use a separate reel set (e.g. index `1`) for the free spin reels and track wins independently so `stats.count_stats_play()` can separate base-game and free-spin RTP contributions.
+
+```cpp
+// Inside play(), after base game win evaluation:
+unsigned fs_count = 10;
+for (unsigned fs = 0; fs < fs_count; fs++)
+{
+    clear_screen();
+
+    // Use free spin reel set (index 1)
+    config.reel_sets[1].spin(rng);
+    drop_new_symbols(config.reel_sets[1]);
+
+    unsigned long long fs_win = get_ways_win(config);
+    cap_wins(base_win, fs_win);   // cap is applied across both phases
+    total_win += fs_win;
+
+    stats.count_stats_play(fs_win, true);  // true = is free spin
+}
+```
+
+Retriggers are implemented by incrementing `fs_count` when the trigger condition is met during a free spin.
+
+---
+
+## Cascades / Tumbles
+
+After evaluating wins, set the winning cells to `-1` on `screen`, then call `cascade()` to apply gravity and `drop_new_symbols()` to refill. Repeat until no new wins are formed.
+
+```cpp
+do
+{
+    vector<winning_Cluster> wins = get_winning_clusters(config);
+    if (wins.empty()) break;
+
+    for (auto& w : wins)
+    {
+        for (auto& cell : w.cells)
+        {
+            screen[cell.first][cell.second] = -1;  // cell = (row, col)
+        }
+        cascade_win += w.pays;
+    }
+
+    cascade();
+    drop_new_symbols(config.reel_sets[using_reel_set]);
+} while (true);
+```
+
+The same pattern applies to Ways or Paylines games — replace `get_winning_clusters()` with the appropriate evaluator and mark the winning cells as `-1` before calling `cascade()`.
+
+---
+
+## Symbol multipliers
+
+Call `reset_symbol_multipliers()` at the start of each play (or at the start of each feature phase). Then set `symbol_multipliers[row][col]` for any cell that carries a multiplier value before calling the win evaluator.
+
+```cpp
+reset_symbol_multipliers();
+
+// Spin and fill screen...
+config.reel_sets[using_reel_set].spin(rng);
+drop_new_symbols(config.reel_sets[using_reel_set]);
+
+// Apply multiplier for symbol ID MULTIPLIER_SYMBOL_ID
+// screen[row][col] — row first, then reel/column
+for (int row = 0; row < nrows; row++) {
+    for (int col = 0; col < nreels; col++) {
+        if (screen[row][col] == MULTIPLIER_SYMBOL_ID) {
+            symbol_multipliers[row][col] = 3;  // 3× multiplier
+        }
+    }
+}
+
+unsigned win = get_lines_win_with_multiplier(config, multiplicative);
+```
+
+See [Win evaluation — Paylines](/guides/win-evaluation#paylines) for the `additive` vs. `multiplicative` distinction.
+
+---
+
+## Win capping across game phases
+
+Pass all win variables to `cap_wins()` in priority order. The first argument is consumed first; subsequent arguments are zeroed if the cap has already been reached.
+
+```cpp
+unsigned long long base_win    = get_ways_win(config);
+unsigned long long fs_win      = 0;
+unsigned long long jackpot_win = 0;
+
+// ... compute fs_win and jackpot_win ...
+
+cap_wins(base_win, fs_win, jackpot_win);  // base_win is capped first
+
+total_win = base_win + fs_win + jackpot_win;
+```
+
+The cap threshold is `cap × bet_for_cap`, both of which are loaded from `info.csv` and set on the `Game` base in `main()`.
+
+---
+
+## Bonus rounds with Weighted_values
+
+`Weighted_values` is the framework's utility for weighted random table lookups. Initialize it from a two-row CSV (row 1 = values, row 2 = weights) and call `sample(rng)` anywhere you need a random draw.
+
+```cpp
+// In MyGame_config::init():
+Weighted_values w_bonus_multipliers;
+w_bonus_multipliers.init(info.folder_config + "\\bonus_multipliers.csv");
+
+// In play():
+int bonus_mult = w_bonus_multipliers.sample(rng);
+total_win *= bonus_mult;
+```
+
+Use separate `Weighted_values` objects for each independent random table (bonus prize picks, feature triggers, reel set selection, etc.).
+
+---
+
+## Statistics tracking by phase
+
+`Game_statistics::count_stats_play(unsigned long long win, bool is_fs)` separates base-game and free-spin contributions so your JSON results report phase-level RTP.
+
+```cpp
+stats.count_stats_play(base_win, false);  // base game
+stats.count_stats_play(fs_win,   true);   // free spins
+```
+
+Call it once per logical play event — once for the base spin and once per free spin iteration — rather than combining all wins into a single call.
+
+---
+
+## RNG snapshots
+
+<Tip>
+  Use `saveRNGstate()` and `loadRNGstate()` to snapshot the RNG before a bonus decision that branches into very different outcomes. This lets you replay specific scenarios deterministically during development.
+</Tip>
+
+`saveRNGstate()` serialises the full `mt19937_64` state to `folder_results/rng_state.txt`. `loadRNGstate()` restores it. Both are defined in `Game.cpp`.
+
+```cpp
+// Save state before a high-variance bonus pick
+saveRNGstate();
+int bonus_prize = w_jackpot.sample(rng);
+
+// Later, restore to replay the same branch:
+loadRNGstate();
+```
+
+Note that `folder_results` must exist before calling `saveRNGstate()` — the method creates the directory automatically if it does not exist.

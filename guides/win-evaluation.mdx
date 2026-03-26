@@ -1,0 +1,227 @@
+---
+title: "Win evaluation"
+description: "Detailed guide to all win evaluation methods available in the Slot class."
+---
+
+All win evaluation methods are members of the `Slot` class (`Slot.h` / `Slot.cpp`). The game class inherits them through `GameTemplate : public Slot`.
+
+<Note>
+  `screen[row][col]` uses **row-major indexing** — the first index is the row (y-axis, 0 = top) and the second is the reel/column (x-axis). This is consistent throughout all win evaluation methods and screen management helpers.
+</Note>
+
+---
+
+## Paylines
+
+<Tabs>
+  <Tab title="get_lines_win">
+    ```cpp
+    unsigned get_lines_win(Slot_config& config);
+    ```
+
+    Evaluates every payline defined in `config.paylines` and returns the total win in credits. Internally calls `get_line_win()` for each line. Non-scatter prizes only.
+
+    ```cpp
+    unsigned long long base_win = get_lines_win(config);
+    ```
+  </Tab>
+  <Tab title="get_lines_win_fast_evaluation">
+    ```cpp
+    unsigned get_lines_win_fast_evaluation(Slot_config& config);
+    ```
+
+    Uses the pre-computed `paytable_lines` 6-D lookup array for faster evaluation. The array is populated by `generate_all_symbols_combinations()` called from `init()` when `info.type == "Paylines"`.
+
+    Limited to games with at most 6 reels. Prefer this over `get_lines_win()` for high-throughput Paylines simulations.
+
+    ```cpp
+    // In init():
+    Slot::generate_all_symbols_combinations(config, 0);
+
+    // In play():
+    unsigned long long base_win = get_lines_win_fast_evaluation(config);
+    ```
+  </Tab>
+  <Tab title="get_lines_win_with_multiplier">
+    ```cpp
+    unsigned get_lines_win_with_multiplier(Slot_config& config, multiplier type_of_multiplier);
+    ```
+
+    Evaluates all paylines and applies per-cell multipliers from `symbol_multipliers[col][row]`. The `multiplier` enum controls how individual cell multipliers are combined across the winning cells of each line:
+
+    - `additive` — values are summed (a line with cells of 2× and 3× pays as 5×).
+    - `multiplicative` — values are multiplied (same example pays as 6×).
+
+    A line with no multiplier symbols still pays 1× when `additive` is used (the implementation falls back to `1` when the sum is `0`).
+
+    ```cpp
+    reset_symbol_multipliers();
+    // ... populate symbol_multipliers for multiplier symbols ...
+    unsigned long long win = get_lines_win_with_multiplier(config, multiplicative);
+    ```
+  </Tab>
+  <Tab title="get_line_win">
+    ```cpp
+    int get_line_win(Slot_config& config, int line_number);
+    ```
+
+    Evaluates a single payline by index. Returns the **index into `config.prizes_list`** for the highest-paying prize on that line, or `-1` if no prize is won.
+
+    `prizes_list` is sorted by payout descending, so the first match found is always the highest prize.
+
+    ```cpp
+    int prize_index = get_line_win(config, 0);
+    if (prize_index >= 0)
+        unsigned win = config.prizes_list[prize_index].payout;
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Ways
+
+<Tabs>
+  <Tab title="get_ways_win">
+    ```cpp
+    unsigned get_ways_win(Slot_config& config);
+    ```
+
+    Standard left-to-right ways evaluation. For each symbol, counts how many instances appear on each reel (respecting wild substitutions), then multiplies across consecutive reels from reel 0. The number of consecutive reels with at least one occurrence determines the `xN` column looked up in `config.paytable`.
+
+    ```cpp
+    unsigned long long base_win = get_ways_win(config);
+    ```
+  </Tab>
+  <Tab title="get_ways_win (with multipliers)">
+    ```cpp
+    unsigned get_ways_win(Slot_config& config, vector<unsigned> multipliers);
+    ```
+
+    Same as the standard ways evaluation, but each reel's symbol count is multiplied by the corresponding value in `multipliers` before accumulating ways. Use this for Megaways-style games where extra rows on a reel increase the number of ways.
+
+    `multipliers` must have exactly `n_reels` elements.
+
+    ```cpp
+    // For Megaways: multipliers = current reel heights
+    vector<unsigned> mults(nreels);
+    for (int i = 0; i < nreels; i++)
+        mults[i] = reels_heights[i];
+
+    unsigned long long base_win = get_ways_win(config, mults);
+    ```
+  </Tab>
+  <Tab title="get_ways_win_R2L">
+    ```cpp
+    unsigned get_ways_win_R2L(Slot_config& config);
+    ```
+
+    Right-to-left ways evaluation. Counts consecutive reels from the rightmost reel backwards.
+
+    <Note>
+      Wild substitution logic for R2L is marked as TODO in the source. Use with care if your game has wild symbols.
+    </Note>
+
+    ```cpp
+    unsigned long long r2l_win = get_ways_win_R2L(config);
+    ```
+  </Tab>
+  <Tab title="get_ways_win_both">
+    ```cpp
+    unsigned get_ways_win_both(Slot_config& config);
+    ```
+
+    Evaluates ways both left-to-right and right-to-left. A symbol that appears on all reels (a full-reel win) is counted **once only** — the R2L pass skips `xN == n_reels` to avoid double-paying.
+
+    ```cpp
+    unsigned long long total_win = get_ways_win_both(config);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Scatter
+
+<Tabs>
+  <Tab title="get_scatter_wins">
+    ```cpp
+    unsigned get_scatter_wins(Slot_config& config);
+    ```
+
+    Counts every occurrence of each symbol anywhere on screen (scattered — not tied to reels or rows) and looks up the payout in `config.paytable[symbol][count]`. Wild substitution is supported for at most one wild symbol.
+
+    Internally uses `symbols_count[]` (a plain C array of size `MAX_N_SYMBOLS`) and `count_scatters()` to build the per-symbol totals.
+
+    ```cpp
+    unsigned long long scatter_win = get_scatter_wins(config);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Clusters
+
+<Tabs>
+  <Tab title="findClusters">
+    ```cpp
+    vector<Cluster> findClusters(Slot_config& config);
+    ```
+
+    Finds all connected groups of matching symbols using depth-first search. Returns every cluster with no minimum-size filter — the caller is responsible for filtering if a minimum cluster size is required.
+
+    A `Cluster` is `vector<Coord>` where `Coord = pair<int, int>` (row, col).
+
+    Neighbor direction depends on `config.type`:
+    - `"Clusters"` — 4-directional (up, down, left, right).
+    - `"Clusters (8 way)"` — 8-directional (includes diagonals).
+
+    Wild symbols are included in clusters of any symbol they substitute for, but a wild cell is not used as a cluster's anchor — only non-wild cells start a DFS traversal.
+
+    ```cpp
+    vector<Cluster> all_clusters = findClusters(config);
+    // Filter to clusters of 5 or more:
+    for (auto& c : all_clusters)
+        if (c.size() >= 5)
+            process_cluster(c);
+    ```
+  </Tab>
+  <Tab title="get_winning_clusters">
+    ```cpp
+    vector<winning_Cluster> get_winning_clusters(Slot_config& config);
+    ```
+
+    Calls `findClusters()` and returns only clusters that pay out according to `config.paytable[symbol][cluster_size]`. Each entry in the returned vector is a `winning_Cluster`:
+
+    ```cpp
+    struct winning_Cluster {
+        int symbol;       // paying symbol ID
+        Cluster cells;   // all cells in the cluster
+        unsigned pays;   // payout amount in credits
+    };
+    ```
+
+    ```cpp
+    vector<winning_Cluster> wins = get_winning_clusters(config);
+    unsigned long long cluster_win = 0;
+    for (auto& w : wins)
+        cluster_win += w.pays;
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Screen management
+
+These helpers manage the `screen` 2-D array and are called as part of the normal play flow.
+
+| Method | Description |
+|---|---|
+| `get_screen(Reel_set&)` | Fills `screen` from reel stops and `reels_heights`. Use when you want a clean read of the current stop without cascade logic. |
+| `drop_new_symbols(Reel_set&)` | Fills empty cells (`-1`) with the next symbols from each reel strip. Used for the initial fill after spinning and for refilling after cascades. |
+| `cascade()` | Gravity pass after symbols have been removed. Non-empty symbols fall to the bottom of each reel; tracker symbols slide left. |
+| `clear_screen()` | Sets every cell to `-1`. Call at the start of each spin iteration. |
+| `count_symbols_on_screen()` | Rebuilds `screen_symbols_count[symbol][reel]`. Called automatically by the ways and scatter evaluators. |
+| `rename_symbols_on_screen(int old_id, int new_id)` | Replaces every occurrence of `old_id` on screen with `new_id`. Useful for transforming symbol types mid-feature. |

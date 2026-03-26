@@ -1,0 +1,105 @@
+---
+title: 'Game_info'
+description: 'Holds all game configuration parameters loaded from info.csv and passed to game init methods.'
+---
+
+`Game_info` is a plain data container. It is populated by `load_info` from an `info.csv` file and then passed to the game's `init` method and to `rnd_log::init`. It lives in `CommonLib/include/Game_info.h`.
+
+## Loading
+
+```cpp
+void load_info(string path);
+```
+
+Reads `info.csv` from `path`. Parses every `Field,Value` row and fills the corresponding member. Also populates `json_info` with a JSON snapshot of the configuration.
+
+<Warning>
+If `info.csv` is not found at the given path the simulation will print a warning and halt. Ensure `folder_config` points to the correct directory before calling `load_info`.
+</Warning>
+
+### info.csv field names
+
+The CSV uses a `Field,Value` format (one field per row). Field names are **case-sensitive**. Unrecognised fields are silently ignored.
+
+| CSV field name | Member set | Notes |
+|---|---|---|
+| `Game name` | `game_name` | |
+| `Version` | `version` | |
+| `Type` | `type` | |
+| `Mode` | `mode` | |
+| `Simulation plays` | `number_of_plays` | |
+| `Seed` | `seed` | |
+| `Plays to print` | `plays_to_print` | |
+| `Number of reels` | `n_reels` | |
+| `Number of rows` | `number_of_rows` | |
+| `Number of trackers` | `number_of_trackers` | |
+| `Stake` | `bet` | |
+| `Bet for cap` | `bet_for_cap` | |
+| `Cap` | `cap` | |
+| `Starting balance` | `starting_balance` | Defaults to `100 × bet` if absent |
+| `Reels heights` | `reel_heights` | Comma-separated integers on the same line |
+| `Spins base` | `spins_base` | Slingo games |
+| `Spins purchase` | `spins_purchase` | Slingo games |
+| `Slingo numbers` | `slingo_numbers` | Slingo games |
+
+## Game identity
+
+| Member | Type | Description |
+|---|---|---|
+| `game_name` | `string` | Used in the output filename and stored in `json_info["game_name"]`. |
+| `version` | `string` | Used in the output filename and stored in `json_info["version"]`. |
+| `type` | `string` | Game mechanic type. Accepted values: `"Paylines"`, `"Ways"`, `"Scatter pays"`, `"Clusters"`, `"Clusters (8 way)"`. |
+
+## Simulation control
+
+| Member | Type | Default | Description |
+|---|---|---|---|
+| `number_of_plays` | `unsigned long long` | — | Total plays to simulate. The loop exits once this count is reached. |
+| `seed` | `unsigned long long` | `0` | RNG seed. `0` uses a random seed; any non-zero value produces a reproducible run. |
+| `mode` | `string` | — | Arbitrary label printed during simulation (e.g. `"regular"`, `"bonus buy"`). |
+| `plays_to_print` | `unsigned` | — | How often (in plays) to refresh the console progress output. |
+
+## Grid dimensions
+
+| Member | Type | Description |
+|---|---|---|
+| `n_reels` | `unsigned` | Number of vertical reels. Does not include horizontal tracker reels. |
+| `number_of_rows` | `unsigned` | Maximum row height of the grid. The internal screen is a `number_of_rows × n_reels` rectangle; non-rectangular layouts use only the leading rows per reel. |
+| `number_of_trackers` | `unsigned` | Number of horizontal tracker reels. |
+| `reel_heights` | `vector<int>` | Per-reel row counts for variable-height grids (Megaways). Populated from the `Reels heights` CSV row as a comma-separated list. Empty for fixed-height games. |
+
+## Bet and cap
+
+| Member | Type | Description |
+|---|---|---|
+| `bet` | `unsigned` | Bet in credits per spin. Passed as `stake` to `Game_statistics` methods. |
+| `bet_for_cap` | `unsigned` | Bet used to scale the win cap. Often identical to `bet`, but may differ for bonus-buy modes. |
+| `cap` | `unsigned long long` | Win cap expressed as a multiplier. The actual maximum win is `cap × bet_for_cap` credits. |
+
+## Paths
+
+| Member | Type | Description |
+|---|---|---|
+| `folder_config` | `string` | Path to the directory containing `info.csv` and all other CSV configuration files (reel strips, paytable, weights, etc.). |
+| `folder_results` | `string` | Path where the output JSON file is written. The filename follows the convention `_rtp_[rtp]__[timestamp]__[game_name]_v[version].json`. |
+
+## Advanced members
+
+| Member | Type | Default | Description |
+|---|---|---|---|
+| `starting_balance` | `unsigned` | `100 × bet` | Initial session balance for session-analysis statistics. If not present in `info.csv` it defaults to 100 × `bet` after loading. |
+| `spins_base` | `unsigned` | `0` | Number of base spins per round. Used by Slingo games. |
+| `spins_purchase` | `unsigned` | `0` | Number of extra (purchased) spins per round. Used by Slingo games. |
+| `slingo_numbers` | `unsigned long` | `75` | Size of the number pool for Slingo draws. |
+| `timestamp` | `unsigned long long` | — | UNIX timestamp set when the simulation finishes. Appears in the output filename only — not written to the JSON body. |
+| `json_info` | `json` | — | JSON snapshot of configuration fields, populated at the end of `load_info`. Embed directly in the output file to record what parameters were used. |
+
+## Output file naming convention
+
+The results file is written to `folder_results` with the name:
+
+```
+_rtp_[rtp]__[timestamp]__[game_name]_v[version].json
+```
+
+The file contains `json_info` (configuration) and the serialised `Game_statistics` output from `stats_to_json`.

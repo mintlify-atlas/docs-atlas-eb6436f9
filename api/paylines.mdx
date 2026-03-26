@@ -1,0 +1,53 @@
+---
+title: "Paylines"
+description: "Stores and loads payline definitions for payline-based slot games."
+---
+
+`Paylines` holds the set of payline paths used to evaluate wins in a paylines-style game. It is owned by `Slot_config` and accessed by the win-evaluation logic in `Slot::get_lines_win()`.
+
+## Members
+
+| Member | Type | Description |
+|---|---|---|
+| `lines` | `vector<vector<int>>` | `lines[payline_index][reel_index]` — the row position (0-based) to read on each reel for that payline |
+
+## Methods
+
+```cpp
+void load_paylines(int n_reels, string config_folder);
+```
+
+Loads payline definitions from `paylines.csv` inside `config_folder`. Each row of the CSV defines one payline as `n_reels` comma-separated row indices.
+
+## paylines.csv Format
+
+One payline per row; each value is the 0-based row index on the corresponding reel. Example for a 5-reel, 3-row game:
+
+```csv
+1,1,1,1,1
+0,0,0,0,0
+2,2,2,2,2
+0,1,2,1,0
+2,1,0,1,2
+```
+
+- Row `0` — middle row straight across
+- Row `1` — top row straight across
+- Row `2` — bottom row straight across
+- Rows `3–4` — V-shaped and inverted-V paylines
+
+## Usage
+
+`Paylines` is loaded automatically by `Slot_config::init()`. After initialization, iterate over paylines in win evaluation:
+
+```cpp
+for (int line = 0; line < (int)config.paylines.lines.size(); line++) {
+    // config.paylines.lines[line][reel] gives the row to read on each reel
+    for (int reel = 0; reel < config.n_reels; reel++) {
+        int row = config.paylines.lines[line][reel];
+        // ... read symbol at (reel, row) ...
+    }
+}
+```
+
+For `"Ways"`, `"Scatter pays"`, and `"Clusters"` game types the `lines` vector is empty and paylines evaluation is skipped.

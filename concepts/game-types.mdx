@@ -1,0 +1,225 @@
+---
+title: "Game types"
+description: The different slot game mechanics supported by GameTemplate.
+---
+
+GameTemplate supports several distinct game mechanics for evaluating wins. The active mechanic is selected via the `type` field in `Slot_config` (and in `info.csv`). Valid values are:
+
+- `"Paylines"`
+- `"Ways"`
+- `"Scatter pays"`
+- `"Clusters"`
+- `"Clusters (8 way)"`
+
+Slingo is handled by the separate `Slingo` class (not `Slot`) and has no `type` string.
+
+<Tabs>
+  <Tab title="Paylines">
+    ## Paylines
+
+    Fixed win lines defined in `paylines.csv`. Each line is a sequence of row indices — one per reel — that together trace a path across the screen. A win occurs when the leftmost symbols on a line form a consecutive matching run.
+
+    **Evaluation function:**
+
+    ```cpp
+    unsigned win = get_lines_win(config);
+    ```
+
+    Iterates over every line in `config.paylines.lines`, calling `get_line_win()` for each. `prizes_list` (sorted descending by payout) is consulted to return the highest applicable prize.
+
+    **Performance variant:**
+
+    ```cpp
+    unsigned win = get_lines_win_fast_evaluation(config);
+    ```
+
+    Uses the pre-computed 6-dimensional lookup table `paytable_lines[MAX_N_SYMBOLS][MAX_N_SYMBOLS][MAX_N_SYMBOLS][MAX_N_SYMBOLS][MAX_N_SYMBOLS][MAX_N_SYMBOLS]` for O(1) per-line lookup. Prefer this in tight simulation loops.
+
+    **Bet control:**
+
+    `Slot_config::bet_per_line` (default `1`) multiplies the stake per active line. Set it to match the game's bet structure.
+
+    **Example `paylines.csv` row** (5-reel, row indices 0-based):
+
+    ```
+    1,1,1,1,1
+    0,0,0,0,0
+    2,2,2,2,2
+    ```
+  </Tab>
+
+  <Tab title="Ways">
+    ## Ways
+
+    Every left-to-right combination of matching symbols across consecutive reels counts as a win — no fixed lines needed. The number of ways for a symbol is the product of its occurrence count on each qualifying reel.
+
+    **Standard L2R evaluation:**
+
+    ```cpp
+    unsigned win = get_ways_win(config);
+    ```
+
+    Internally calls `count_symbols_on_screen()`, applies wild substitutions via `substitutes_for[][]`, then multiplies per-reel symbol counts.
+
+    **With per-reel multipliers** (equivalent to extra ways on specific reels):
+
+    ```cpp
+    vector<unsigned> multipliers = {1, 2, 1, 2, 1};
+    unsigned win = get_ways_win(config, multipliers);
+    ```
+
+    Each reel's symbol count is multiplied by the corresponding entry in `multipliers` before computing the ways product.
+
+    **Both directions (L2R + R2L):**
+
+    ```cpp
+    unsigned win = get_ways_win_both(config);
+    ```
+
+    Evaluates left-to-right and right-to-left separately, then sums them. If a symbol appears on **all** reels, the full N-of-a-kind prize is awarded only once (the R2L pass skips prizes where `xN == n_reels`).
+
+    **Pure R2L evaluation:**
+
+    ```cpp
+    unsigned win = get_ways_win_R2L(config);
+    ```
+  </Tab>
+
+  <Tab title="Scatter pays">
+    ## Scatter pays
+
+    Wins are based on how many times a symbol appears anywhere on the screen, regardless of position or reel order.
+
+    **Evaluation function:**
+
+    ```cpp
+    unsigned win = get_scatter_wins(config);
+    ```
+
+    Counts all symbols on screen into the `symbols_count[]` array (indexed by symbol ID). If a wild symbol is defined in `config.wild_symbols`, its occurrences are added to the count of every symbol it substitutes for. The payout is then looked up as `paytable[symbolID][count]`.
+
+    **Wild support:** At most one wild symbol is supported. Additional wilds are ignored.
+
+    **Paytable loading:** For scatter-pays games, the paytable is loaded via `load_paytable_scatter_pays(info)`, which still reads `paytable.csv` but sizes each row to `n_reels × n_rows + 1` columns to accommodate the maximum possible scatter count on the full grid.
+
+    **Example:** If symbol `2` appears 8 times on a 5×3 screen:
+
+    ```cpp
+    win += config.paytable[2][8]; // payout for 8 of symbol 2
+    ```
+  </Tab>
+
+  <Tab title="Clusters">
+    ## Clusters
+
+    Wins are awarded for groups (clusters) of connected identical symbols. Two cells are connected if they share an edge (up, down, left, right — 4-way adjacency). The size of the cluster determines the payout.
+
+    **Find all clusters:**
+
+    ```cpp
+    vector<Cluster> clusters = findClusters(config);
+    ```
+
+    Uses depth-first search (`dfs()`). Wild symbols are included in clusters but do not anchor a new cluster themselves. Each non-wild symbol seeds at most one cluster (the `visited` array prevents double-counting).
+
+    **Get winning clusters with payouts:**
+
+    ```cpp
+    vector<winning_Cluster> wins = get_winning_clusters(config);
+    ```
+
+    Returns a vector of `winning_Cluster` structs, each containing:
+    - `symbol` — the winning symbol ID
+    - `cells` — list of `(row, col)` coordinates in the cluster
+    - `pays` — payout looked up as `paytable[symbol][cluster_size]`
+
+    Only clusters with `pays > 0` are included.
+
+    **8-way variant** (diagonal adjacency):
+
+    ```cpp
+    // Set in Slot_config:
+    config.type = "Clusters (8 way)";
+    // Then use the same calls:
+    vector<winning_Cluster> wins = get_winning_clusters(config);
+    ```
+
+    When `config.type == "Clusters (8 way)"`, the DFS expands to all 8 neighbors (including diagonals) instead of 4.
+  </Tab>
+
+  <Tab title="Megaways">
+    ## Megaways
+
+    A variant of the Ways mechanic where each reel can show a variable number of rows per spin. The total number of ways is the product of all reel heights.
+
+    **Height tracking:**
+
+    ```cpp
+    vector<unsigned> reels_heights; // one entry per reel
+    ```
+
+    Initialized to the maximum row count in `Slot::init()`. Before each spin, heights are updated to reflect how many rows each reel will show. `get_screen()` uses `reels_heights[c]` to decide which cells to populate — cells beyond the current height are left as `-1`.
+
+    **Total ways calculation:**
+
+    ```cpp
+    unsigned total_ways = 1;
+    for (unsigned r = 0; r < n_reels; r++)
+        total_ways *= reels_heights[r];
+    ```
+
+    Win evaluation uses `get_ways_win(config)` — the per-reel symbol counts naturally reflect the variable height since unpopulated cells (`-1`) are ignored by `count_symbols_on_screen()`.
+
+    **Example setup for a 6-reel Megaways game:**
+
+    ```cpp
+    // After spin, update heights (e.g. from a separate height reel):
+    reels_heights = {3, 5, 4, 6, 2, 7};
+    get_screen(config.reel_sets[using_reel_set]);
+    unsigned win = get_ways_win(config);
+    ```
+  </Tab>
+
+  <Tab title="Slingo">
+    ## Slingo
+
+    A hybrid bingo-slot format. Slingo is implemented in the `Slingo` class, which extends `Game` directly (not `Slot`).
+
+    **Key members:**
+
+    | Member | Type | Description |
+    |--------|------|-------------|
+    | `card_numbers` | `vector<vector<int>>` | The player's bingo card |
+    | `spin_results` | `vector<int>` | Numbers revealed by the reels each spin |
+    | `jokers` | `vector<bool>` | Joker flags per reel position |
+    | `super_jokers` | `vector<bool>` | Super-joker flags per reel position |
+    | `reel_set_base` | `Reel_set` | Reel set for standard spins |
+    | `reel_set_purchase` | `Reel_set` | Reel set for purchased spins |
+    | `spins_standard` | `unsigned` | Number of standard spins per round |
+    | `spins_purchase` | `unsigned` | Number of purchasable extra spins |
+
+    **Spin and mark:**
+
+    ```cpp
+    // Spin the reels and collect results:
+    spin_reels(reel_set_base);
+
+    // Apply optimal joker placement strategy:
+    optimal_strategy();
+    ```
+
+    `spin_reels()` fills `spin_results` from the reel set stops. `optimal_strategy()` resolves joker and super-joker symbols by choosing the card position that maximises the number of completed lines.
+
+    **Initialization:**
+
+    ```cpp
+    slingo.init(n_reels, n_rows, stake, spins_base, extra_spins, config_folder);
+    ```
+
+    Or via a `Game_info` object:
+
+    ```cpp
+    slingo.init(info);
+    ```
+  </Tab>
+</Tabs>

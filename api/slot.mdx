@@ -1,0 +1,406 @@
+---
+title: "Slot"
+description: "Extends Game with slot-specific screen management and win evaluation methods."
+---
+
+`Slot` extends [`Game`](/api/game) and provides a complete slot machine engine: a 2-D symbol grid, reel-strip management, payline/ways/scatter/cluster evaluation, symbol multipliers, and cascade mechanics.
+
+Derive your slot game class from `Slot` and call one of the `init` overloads before running the simulation.
+
+---
+
+## Types and Structs
+
+### `using Coord = pair<int, int>`
+
+Represents a single cell on the screen as `(row, col)` — i.e., `(row index, reel/column index)`. This matches the `screen[row][col]` indexing used throughout the framework.
+
+---
+
+### `using Cluster = vector<Coord>`
+
+An ordered list of `Coord` values describing all cells that belong to a single connected cluster of matching symbols.
+
+---
+
+### `struct winning_Cluster`
+
+Result type returned by `get_winning_clusters()`.
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | `int` | Symbol ID of the winning cluster (excluding wilds). |
+| `cells` | `Cluster` | All screen coordinates that form the cluster. |
+| `pays` | `unsigned` | Payout amount for this cluster. |
+
+---
+
+### `enum multiplier`
+
+Controls how per-cell multipliers are combined when evaluating paylines with `get_lines_win_with_multiplier()`.
+
+| Enumerator | Behaviour |
+|---|---|
+| `additive` | Sum all multipliers along the winning line. If the sum is zero the line pays at ×1. |
+| `multiplicative` | Multiply all non-zero multipliers along the winning line. |
+
+---
+
+## Initialization
+
+### `void init(unsigned n_reels, unsigned n_rows, unsigned stake, unsigned n_symbols)`
+
+The standard initializer for fixed-grid slots. Calls `Game::init(stake)` internally, then allocates:
+
+- `screen` — a `n_rows × n_reels` grid initialized to `-1`
+- `reels_heights` — all entries set to `n_rows`
+- `screen_symbols_count` — a `n_symbols × n_reels` count matrix
+- `symbol_multipliers` — a `n_rows × n_reels` matrix initialized to `0`
+
+<ParamField path="n_reels" type="unsigned" required>
+  Number of reels (columns).
+</ParamField>
+
+<ParamField path="n_rows" type="unsigned" required>
+  Number of visible rows per reel.
+</ParamField>
+
+<ParamField path="stake" type="unsigned" required>
+  Bet value in credits passed to `Game::init()`.
+</ParamField>
+
+<ParamField path="n_symbols" type="unsigned" required>
+  Total number of distinct symbol IDs used by the game.
+</ParamField>
+
+---
+
+### `void init(unsigned n_reels, unsigned n_trackers, unsigned n_rows, unsigned stake, unsigned n_symbols)`
+
+Extended initializer that adds tracker rows below the main grid. Calls the four-parameter overload first, then appends `n_trackers` additional rows to `screen`.
+
+<ParamField path="n_reels" type="unsigned" required>
+  Number of reels (columns).
+</ParamField>
+
+<ParamField path="n_trackers" type="unsigned" required>
+  Number of tracker rows appended below the visible grid.
+</ParamField>
+
+<ParamField path="n_rows" type="unsigned" required>
+  Number of visible rows per reel.
+</ParamField>
+
+<ParamField path="stake" type="unsigned" required>
+  Bet value in credits passed to `Game::init()`.
+</ParamField>
+
+<ParamField path="n_symbols" type="unsigned" required>
+  Total number of distinct symbol IDs.
+</ParamField>
+
+---
+
+## Screen Management
+
+### `vector<vector<int>> screen`
+
+The primary symbol grid. Indexed as `screen[row][col]` where `col` is the reel index and `row` is the row index (0 = top). A cell value of `-1` indicates an empty cell.
+
+---
+
+### `vector<unsigned> reels_heights`
+
+The number of visible rows for each reel. For fixed-grid games all entries equal `n_rows`. For Megaways-style games each entry is updated per spin to reflect the current variable height of that reel.
+
+---
+
+### `void get_screen(Reel_set& reel_set)`
+
+Populates `screen` from `reel_set`. For each reel `c`, reads `reels_heights[c]` symbols starting at `reel_set.stops[c]` on the strip, wrapping around. Cells outside the active height are set to `-1`. Tracker rows (if any) are filled from the tracker strips.
+
+<ParamField path="reel_set" type="Reel_set&" required>
+  The reel set whose current stop positions determine which symbols appear on screen.
+</ParamField>
+
+---
+
+### `void print_screen()`
+
+Prints numeric symbol IDs to `stdout` in a tab-separated grid. Empty cells (`-1`) are printed as a blank space.
+
+---
+
+### `void print_screen(Slot_config& config)`
+
+Prints the symbol short names (up to 3 characters each) to `stdout`.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration providing the `symbols_list` for name look-ups.
+</ParamField>
+
+---
+
+### `string log_screen(Slot_config& config)`
+
+Returns a JSON string representing the current screen contents.
+
+Format:
+```json
+{"S":[
+["SYM","WLD",...],
+...
+]}
+```
+
+Empty cells are represented as `"_"`.
+
+<ParamField path="config" type="Slot_config&" required>
+  Provides symbol short names for serialization.
+</ParamField>
+
+**Returns:** `string` — JSON screen representation.
+
+---
+
+### `string log_screen(Slot_config& config, int spin)`
+
+Same as `log_screen(config)` but wraps the output under a spin-keyed object, suitable for the PP protocol log format.
+
+Format:
+```json
+"spin_N": {"S":[...]}
+```
+
+<ParamField path="config" type="Slot_config&" required>
+  Provides symbol short names.
+</ParamField>
+
+<ParamField path="spin" type="int" required>
+  Spin number used as the key in the JSON object.
+</ParamField>
+
+**Returns:** `string` — JSON screen representation keyed by spin number.
+
+---
+
+## Win Evaluation
+
+### `unsigned get_lines_win(Slot_config& config)`
+
+Evaluates all paylines defined in `config.paylines` by calling `get_line_win()` on each. Non-scatter prizes are summed.
+
+<ParamField path="config" type="Slot_config&" required>
+  Configuration containing paylines, paytable, prizes list, and symbol substitution rules.
+</ParamField>
+
+**Returns:** `unsigned` — total win from all paylines.
+
+---
+
+### `unsigned get_lines_win_fast_evaluation(Slot_config& config)`
+
+Evaluates all paylines using the precomputed `config.paytable_lines` lookup array instead of per-symbol iteration. Faster than `get_lines_win()` once `paytable_lines` has been built.
+
+<ParamField path="config" type="Slot_config&" required>
+  Configuration with a fully populated `paytable_lines` array.
+</ParamField>
+
+**Returns:** `unsigned` — total win from all paylines.
+
+---
+
+### `unsigned get_lines_win_with_multiplier(Slot_config& config, multiplier type_of_multiplier)`
+
+Evaluates paylines and applies the per-cell `symbol_multipliers` values to each winning line. The multiplier for a line is computed from the cells that form the winning combination.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration.
+</ParamField>
+
+<ParamField path="type_of_multiplier" type="multiplier" required>
+  `additive` — multipliers along the line are summed (defaults to ×1 if sum is 0).  
+  `multiplicative` — non-zero multipliers are multiplied together.
+</ParamField>
+
+**Returns:** `unsigned` — total win after multiplier application.
+
+---
+
+### `int get_line_win(Slot_config& config, int line_number)`
+
+Evaluates a single payline and returns the index of the highest-paying prize won, or `-1` if no prize is won. The `prizes_list` is expected to be ordered by payout descending so that only the best prize is returned.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration.
+</ParamField>
+
+<ParamField path="line_number" type="int" required>
+  Zero-based index into `config.paylines.lines`.
+</ParamField>
+
+**Returns:** `int` — index into `config.prizes_list`, or `-1` if no prize.
+
+---
+
+### `unsigned get_ways_win(Slot_config& config)`
+
+Evaluates left-to-right ways wins. For each symbol, counts consecutive reels (from reel 0) on which that symbol (or a wild substituting for it) appears, accumulates the number of ways, and looks up the payout.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration with paytable and wild substitution rules.
+</ParamField>
+
+**Returns:** `unsigned` — total L2R ways win.
+
+---
+
+### `unsigned get_ways_win(Slot_config& config, vector<unsigned> multipliers)`
+
+L2R ways win with per-reel multipliers. Each reel's symbol count contribution is multiplied by the corresponding entry in `multipliers` before accumulating ways.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration.
+</ParamField>
+
+<ParamField path="multipliers" type="vector<unsigned>" required>
+  Per-reel multiplier values. Length must equal the number of reels.
+</ParamField>
+
+**Returns:** `unsigned` — total L2R ways win after reel multipliers.
+
+---
+
+### `unsigned get_ways_win_R2L(Slot_config& config)`
+
+Evaluates right-to-left ways wins, mirroring the L2R logic starting from the rightmost reel.
+
+<Warning>
+  Wild symbol logic is not yet implemented for R2L evaluation.
+</Warning>
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration.
+</ParamField>
+
+**Returns:** `unsigned` — total R2L ways win.
+
+---
+
+### `unsigned get_ways_win_both(Slot_config& config)`
+
+Computes L2R and R2L ways wins and adds them together. If a symbol spans all reels (full-reel prize), that prize is counted only once to avoid double-awarding.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration.
+</ParamField>
+
+**Returns:** `unsigned` — combined L2R + R2L ways win.
+
+---
+
+### `unsigned get_scatter_wins(Slot_config& config)`
+
+Evaluates scatter-pay wins by counting symbol occurrences across the entire screen. Supports at most one wild symbol as defined in `config.wild_symbols`.
+
+<ParamField path="config" type="Slot_config&" required>
+  Game configuration including scatter paytable entries.
+</ParamField>
+
+**Returns:** `unsigned` — total scatter win.
+
+---
+
+### `vector<Cluster> findClusters(Slot_config& config)`
+
+Traverses the screen using depth-first search and returns all adjacent-symbol clusters. By default, adjacency is 4-directional (up/down/left/right). If `config.type == "Clusters (8 way)"`, diagonal neighbors are also included. Wild symbols can extend clusters but are not used as cluster seeds.
+
+<ParamField path="config" type="Slot_config&" required>
+  Configuration providing wild symbol IDs, adjacency type, and substitution rules.
+</ParamField>
+
+**Returns:** `vector<Cluster>` — each element is a cluster of connected matching-symbol coordinates.
+
+---
+
+### `vector<winning_Cluster> get_winning_clusters(Slot_config& config)`
+
+Builds the cluster list via `findClusters()` and filters to those with a non-zero payout. Each result includes the dominant (non-wild) symbol, the cluster cells, and the payout amount.
+
+<ParamField path="config" type="Slot_config&" required>
+  Configuration with cluster paytable entries.
+</ParamField>
+
+**Returns:** `vector<winning_Cluster>` — winning clusters with symbol, coordinates, and payout.
+
+---
+
+## Symbol Multipliers
+
+### `vector<vector<unsigned>> symbol_multipliers`
+
+A `n_rows × n_reels` grid of per-cell multiplier values. Initialized to `0` by `init()`. Used by `get_lines_win_with_multiplier()`. Cells that carry no multiplier should be left at their default value; when using `additive` mode a zero-sum defaults to ×1.
+
+---
+
+### `void reset_symbol_multipliers()`
+
+Sets every entry of `symbol_multipliers` to `0`, effectively clearing all per-cell multipliers.
+
+---
+
+## Protected Methods
+
+The following methods are available to classes derived from `Slot`.
+
+### `void drop_new_symbols(Reel_set& reel_set)`
+
+Fills empty cells (`-1`) from the reel strip starting just above the current stop, moving the stop pointer backward for each filled cell. Empty tracker cells are similarly filled from their own strips.
+
+<ParamField path="reel_set" type="Reel_set&" required>
+  Reel set whose stops are advanced to supply new symbols.
+</ParamField>
+
+---
+
+### `void cascade()`
+
+Applies gravity after an explosion: symbols in main reels fall to the bottom of their reel column (lowest available row). Symbols in tracker rows shift to the left toward `trackers_reels[0]`.
+
+---
+
+### `void clear_screen()`
+
+Sets all cells in `screen` to `-1`.
+
+---
+
+### `void count_symbols_on_screen()`
+
+Rescans the screen and rebuilds `screen_symbols_count` (per-symbol per-reel counts) and `symbols_count` (total per-symbol counts). Called internally before ways/scatter evaluation.
+
+---
+
+### `void rename_symbols_on_screen(int old_id, int new_id)`
+
+Replaces every occurrence of `old_id` on the screen with `new_id`. Useful for symbol transformation effects.
+
+<ParamField path="old_id" type="int" required>
+  Symbol ID to replace.
+</ParamField>
+
+<ParamField path="new_id" type="int" required>
+  Replacement symbol ID.
+</ParamField>
+
+---
+
+### `void explode_symbols_ways(Slot_config& config)`
+
+Removes (sets to `-1`) all symbols involved in a winning ways combination. Must be called after `get_ways_win()` so that wild substitution counts are already applied to `screen_symbols_count`.
+
+---
+
+### `void explode_symbols_scatter_pays(Slot_config& config)`
+
+Removes all symbols that contributed to a scatter win (i.e., symbols whose paytable entry for their current screen count is non-zero).

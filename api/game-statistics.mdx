@@ -1,0 +1,217 @@
+---
+title: 'Game_statistics'
+description: 'Tracks and reports Monte Carlo simulation statistics including RTP, hit rate, and win distribution.'
+---
+
+`Game_statistics` accumulates all per-play counters during a simulation run and exposes methods to compute and report RTP, hit rate, standard deviation, and win distribution. It lives in `CommonLib/include/Game_statistics.h`.
+
+## Core counters
+
+All counters are public and zero-initialised. Update them exclusively through `count_stats_play`.
+
+| Member | Type | Description |
+|---|---|---|
+| `plays` | `unsigned long long` | Total plays executed in the simulation. |
+| `hits` | `unsigned long long` | Number of plays where win > 0. |
+| `total_payout` | `unsigned long long` | Cumulative credits won with the cap applied per play. |
+| `total_payout_without_cap` | `unsigned long long` | Cumulative credits won with no cap applied. |
+| `max_payout` | `unsigned long long` | Highest single-play win observed. |
+| `total_payout_sq` | `double` | Sum of squared wins (\$\sum x_i^2\$). Used to compute standard deviation. |
+| `prize_hits_base` | `unsigned long long[100]` | Per-prize hit counts for the base game. Array size is `MAX_NUMBER_OF_PRIZES` (100). |
+| `prize_hits_fs` | `unsigned long long[100]` | Per-prize hit counts for free spins. Array size is `MAX_NUMBER_OF_PRIZES` (100). |
+
+## Session tracking
+
+Used for session-analysis statistics (e.g. loss rate, duplication rate).
+
+| Member | Type | Description |
+|---|---|---|
+| `starting_balance` | `unsigned long` | Balance at the start of each session, set from `Game_info::starting_balance`. Defaults to 100 × bet if not provided in `info.csv`. |
+| `current_balance` | `unsigned long` | Running balance within the current session. |
+| `total_sessions` | `unsigned long long` | Total sessions completed (a session ends on bust or doubling). |
+| `sessions_loosing` | `unsigned long long` | Sessions that ended by going bust (balance < stake). |
+| `sessions_duplicating` | `unsigned long long` | Sessions that ended by doubling the starting balance. |
+
+## Methods
+
+### count\_stats\_play
+
+Call once after every resolved play. Increments `plays`, `hits`, `total_payout`, `total_payout_sq`, `max_payout`, and the win-distribution arrays.
+
+```cpp
+void count_stats_play(unsigned long long win, unsigned stake);
+```
+
+Also updates session counters by deducting the stake and adding the win to `current_balance`.
+
+---
+
+```cpp
+void count_stats_play(unsigned long long win, bool is_fs);
+```
+
+Phase-aware variant. Routes the win into the free-spin or base-game coin-out arrays (`coinout_fs` / `coinout_no_fs`) depending on `is_fs`. Does **not** update top-level counters; call the primary overload separately for those.
+
+---
+
+```cpp
+void count_stats_play(unsigned long long win, unsigned stake, unsigned using_reelset);
+```
+
+Per-reel-set tracking variant. Calls the primary overload internally, then also accumulates `total_win_by_reelset` and `total_hits_by_reelset` for reel-set `using_reelset`.
+
+### stats\_to\_json
+
+```cpp
+json stats_to_json(unsigned stake);
+```
+
+Serialises all statistics to a `nlohmann::json` object. Embed this in the output file:
+
+```cpp
+json output;
+output["stats"] = stats.stats_to_json(info.bet);
+```
+
+The returned JSON includes:
+
+| Key | Value |
+|---|---|
+| `hits` | Total hit count |
+| `plays` | Total play count |
+| `total_payout` | Cumulative payout (with cap) |
+| `max_payout` | Highest single-play win |
+| `total_payout_sq` | Sum of squared wins |
+| `hit_rate` | `hits / plays` |
+| `rtp_total` | `total_payout / (plays × stake)` |
+| `sd` | Standard deviation (see formula below) |
+| `coinOut` | Sparse win-frequency table (all phases) |
+| `coinOut_no_fs` | Sparse win-frequency table (base game only) |
+| `coinOut_fs` | Sparse win-frequency table (free spins only) |
+| `starting_balance` | Session starting balance |
+| `current_balance` | Current session balance |
+| `total_sessions` | Sessions completed |
+| `sessions_loosing` | Sessions ended by bust |
+| `sessions_duplicating` | Sessions ended by doubling |
+
+### print\_stats
+
+```cpp
+void print_stats(unsigned stake);
+```
+
+Prints RTP, hit rate, standard deviation, max win, win-and-RTP distribution table, and session information to stdout.
+
+### print\_stats\_WO\_coin\_out
+
+```cpp
+void print_stats_WO_coin_out(unsigned stake);
+```
+
+Prints the summary line (RTP, hit rate, standard deviation, max win, cap difference) without the full distribution table.
+
+### print\_coinout
+
+```cpp
+void print_coinout();
+```
+
+Writes the exact win-frequency distribution to `out.csv` and prints a notification to stdout.
+
+### standard\_deviation
+
+```cpp
+double standard_deviation(unsigned stake);
+```
+
+Returns the sample standard deviation of wins per unit stake:
+
+$$
+\sigma = \frac{\sqrt{\frac{n}{n-1}\left(\frac{\sum x_i^2}{n} - \left(\frac{\sum x_i}{n}\right)^2\right)}}{\text{stake}}
+$$
+
+### test\_rtp\_confidence\_95
+
+```cpp
+void test_rtp_confidence_95(double rtp_target, unsigned stake);
+```
+
+Checks whether the simulated RTP falls within the 95% confidence interval of `rtp_target` (using z = 1.959964) and prints `RTP OK`, `RTP ALTO`, or `RTP BAJO` accordingly. Call this at the end of a simulation run to validate results.
+
+### reset
+
+```cpp
+void reset();
+```
+
+Clears `plays`, `total_payout`, `hits`, `max_payout`, and `total_payout_sq`. Does not clear win-distribution arrays.
+
+### max\_win\_hits
+
+```cpp
+unsigned max_win_hits();
+```
+
+Returns the number of times `max_payout` was achieved during the simulation.
+
+### get\_wins\_hits
+
+```cpp
+vector<vector<unsigned long long>> get_wins_hits();
+```
+
+Returns raw win-distribution data as a `vector` of two parallel vectors: `[0]` contains win values, `[1]` contains hit counts for each value.
+
+## RTP and hit-rate formulas
+
+```
+RTP      = total_payout / (plays × stake)
+Hit rate = hits / plays
+```
+
+## Win distribution internals
+
+The distribution is stored in two structures:
+
+- `coinout[PAYOUTS_LIST_SIZE]` — fixed-size array (100,000 entries) where position `i` holds the number of plays with a total win of exactly `i` credits. Covers wins from 0 to 99,999 credits.
+- `bigger_wins` — `vector<unsigned long long>` that stores individual wins above 99,999 credits.
+
+The rank-based distribution table groups wins by multiples of stake using these breakpoints:
+
+| Breakpoint (× stake) | Breakpoint (× stake) |
+|---|---|
+| 0 | 30 |
+| 1 | 50 |
+| 2 | 100 |
+| 5 | 200 |
+| 10 | 500 |
+| 20 | 1000 |
+
+Each interval is left-open, right-closed: wins in (prev, current] are counted together.
+
+## Extending Game\_statistics
+
+Create a subclass to add game-specific fields to the JSON output or extra lines to the console output:
+
+```cpp
+class MyGame_stats : public Game_statistics {
+public:
+    json stats_to_json(unsigned stake);  // override to add game-specific fields
+    void print_stats(unsigned stake);    // override to add custom console output
+};
+```
+
+Call the base implementation first to include all standard fields:
+
+```cpp
+json MyGame_stats::stats_to_json(unsigned stake) {
+    json resp = Game_statistics::stats_to_json(stake);
+    resp["my_custom_counter"] = my_custom_counter;
+    return resp;
+}
+
+void MyGame_stats::print_stats(unsigned stake) {
+    Game_statistics::print_stats(stake);
+    cout << "My custom counter: " << my_custom_counter << endl;
+}
+```
